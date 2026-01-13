@@ -1,0 +1,8 @@
+# Highway Environment and dependencies
+highway-env==1.10.2
+gymnasium==1.2.3
+numpy==2.4.1
+pygame==2.6.1
+matplotlib==3.10.8
+pandas==2.3.3
+scipy==1.17.0
