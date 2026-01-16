@@ -1,0 +1,8 @@
+ - [ ] Implement PPO algorithm (baseline)
+	 - [ ] Evaluate performance
+ - [ ] Implement ACCEL to generate using PPO baseline
+	 - [ ] Evaluate performance
+ - [ ] Implement PLR using PPO baseline
+	 - [ ] Evaluate performance
+ - [ ] Implement ACCEL + PLR 
+	 - [ ] Evaluate performance
