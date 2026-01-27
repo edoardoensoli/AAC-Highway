@@ -4,14 +4,26 @@ import torch
 from stable_baselines3 import DQN
 from stable_baselines3.common.callbacks import BaseCallback
 from tqdm import tqdm
+from highway_env.vehicle.behavior import IDMVehicle
+
+class DMVehicle(IDMVehicle):
+    ACC_MAX = 8.0
+    ACC_MIN = -3.5
+    tau = 0.8
+    delta = 3.0
+    POLITENESS = 1
+    LANE_CHANGE_MIN_ACC_GAIN = 0.1
+    LANE_CHANGE_MAX_BRAKING_IMPOSED = 3.0
 
 env = gymnasium.make(
   "highway-v0",
   config={
-    "lanes_count": 3, 
+    "lanes_count": 4, 
     "vehicles_count": 25,  
     "vehicles_density": 1,
-    "duration": 60,  
+    "duration": 60,
+    "simulation_frequency":30,
+    "other_vehicles_type": "highway_env.vehicle.behavior.IDMVehicle",
     },
   render_mode='rgb_array'
 )
@@ -20,9 +32,6 @@ env = gymnasium.make(
 if torch.cuda.is_available():
     device = "cuda"
     print("Using CUDA GPU")
-elif torch.backends.mps.is_available():
-    device = "mps"
-    print("Using Apple Silicon MPS")
 else:
     device = "cpu"
     print("Using CPU")
