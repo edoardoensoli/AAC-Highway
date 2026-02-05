@@ -1,10 +1,16 @@
 import gymnasium
 import highway_env
 import torch
+from highway_env.vehicle.behavior import IDMVehicle
 from stable_baselines3 import DQN
 from stable_baselines3.common.callbacks import BaseCallback
+from metrics_tracker import evaluate, HighwayMetrics
+from pathlib import Path
 from tqdm import tqdm
-from highway_env.vehicle.behavior import IDMVehicle
+from datetime import datetime
+import json
+
+TRAIN = False
 
 class DMVehicle(IDMVehicle):
     ACC_MAX = 8.0
@@ -18,7 +24,6 @@ class DMVehicle(IDMVehicle):
 env = gymnasium.make(
   "highway-v0",
   config={
-    "lanes_count": 4, 
     "lanes_count": 4, 
     "vehicles_count": 25,  
     "vehicles_density": 1,
@@ -66,10 +71,11 @@ model = DQN('MlpPolicy', env,
               tensorboard_log="highway_dqn/",
               device=device)
 
-'''
-model.learn(int(100000), callback=TqdmCallback())
-model.save("highway_dqn/model")
-'''
+
+if TRAIN:
+    model.learn(int(100000), callback=TqdmCallback())
+    model.save("highway_dqn/model")
+
 
 # Load and test saved model
 model = DQN.load("highway_dqn/model", device=device)
@@ -122,14 +128,12 @@ results = evaluate(
 # Salva risultati in JSON
 repo_root = Path(__file__).resolve().parents[1]
 logs_dir = repo_root / "logs"
-from datetime import datetime
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 out_path = logs_dir / f"dqn_metrics_{timestamp}.json"
 
 # Crea tracker per salvare (la funzione evaluate restituisce solo il dict)
 tracker = HighwayMetrics(metrics=metrics_to_use)
 # Riesegui una rapida valutazione per avere i dati completi (oppure salva manualmente)
-import json
 logs_dir.mkdir(parents=True, exist_ok=True)
 with open(out_path, "w") as f:
     json.dump({
@@ -137,10 +141,12 @@ with open(out_path, "w") as f:
         "timestamp": timestamp,
         "n_episodes": 10,
         "config": {
-            "lanes_count": 4,
-            "vehicles_count": 25,
-            "vehicles_density": 1.4,
-            "duration": 60,
+            "lanes_count": env.unwrapped.config["lanes_count"],
+            "vehicles_count": env.unwrapped.config["vehicles_count"],
+            "vehicles_density": env.unwrapped.config["vehicles_density"],
+            "duration": env.unwrapped.config["duration"],
+            "simulation_frequency": env.unwrapped.config["simulation_frequency"],
+            "other_vehicles_type": env.unwrapped.config["other_vehicles_type"],
         },
         "results": results,
     }, f, indent=2)

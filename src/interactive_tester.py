@@ -211,6 +211,18 @@ class MetricsTracker:
 # ENHANCED COMPONENTS (using original UI classes as base)
 # ============================================================================
 
+def safe_render_text(font, text, color):
+    """Safely render text, handling pygame state issues"""
+    try:
+        if not text:
+            text = " "  # Prevent zero-width text
+        return font.render(str(text), True, color)
+    except pygame.error:
+        # Try to reinit font module
+        pygame.font.init()
+        return font.render(str(text) if text else " ", True, color)
+
+
 def draw_rounded_rect(surface, color, rect, radius, alpha=255):
     """Draw a rounded rectangle with optional transparency"""
     if alpha < 255:
@@ -307,12 +319,12 @@ class Slider:
                           (handle_x, self.y + self.height // 2), self.handle_radius, 2)
         
         # Label
-        label_surf = small_font.render(self.label, True, Colors.TEXT_SECONDARY)
+        label_surf = safe_render_text(small_font, self.label, Colors.TEXT_SECONDARY)
         surface.blit(label_surf, (self.x, self.y - 20))
         
         # Value
         value_str = self.format_str.format(self.value)
-        value_surf = small_font.render(value_str, True, Colors.TEXT_PRIMARY)
+        value_surf = safe_render_text(small_font, value_str, Colors.TEXT_PRIMARY)
         badge_rect = pygame.Rect(self.x + self.width + 8, self.y + 2, value_surf.get_width() + 12, 20)
         pygame.draw.rect(surface, Colors.BG_LIGHT, badge_rect, border_radius=4)
         surface.blit(value_surf, (badge_rect.x + 6, badge_rect.y + 3))
@@ -359,7 +371,7 @@ class PresetButton:
         
         # Text
         text_color = Colors.TEXT_PRIMARY if self.hovering else Colors.TEXT_SECONDARY
-        text = font.render(self.preset_name, True, text_color)
+        text = safe_render_text(font, self.preset_name, text_color)
         text_rect = text.get_rect(center=(self.x + self.width // 2, self.y + self.height // 2))
         surface.blit(text, text_rect)
 
@@ -430,7 +442,7 @@ class EnhancedControlPanel:
         pygame.draw.rect(surface, Colors.BORDER, panel_rect, 1, border_radius=8)
         
         # Title
-        title = title_font.render("⚙️ Environment Config", True, Colors.TEXT_PRIMARY)
+        title = safe_render_text(title_font, "⚙️ Environment Config", Colors.TEXT_PRIMARY)
         surface.blit(title, (self.x + 10, self.y + 10))
         
         # Sliders
@@ -438,7 +450,7 @@ class EnhancedControlPanel:
             slider.draw(surface, font, small_font)
         
         # Presets label
-        preset_label = small_font.render("Presets:", True, Colors.TEXT_SECONDARY)
+        preset_label = safe_render_text(small_font, "Presets:", Colors.TEXT_SECONDARY)
         surface.blit(preset_label, (self.x + 10, self.y + 210))
         
         # Preset buttons
@@ -469,11 +481,11 @@ class EnhancedStatsPanel:
         pygame.draw.rect(surface, Colors.BORDER, panel_rect, 1, border_radius=8)
         
         # Title
-        title = title_font.render(f"📊 {self.model_name} Stats", True, Colors.TEXT_PRIMARY)
+        title = safe_render_text(title_font, f"📊 {self.model_name} Stats", Colors.TEXT_PRIMARY)
         surface.blit(title, (self.x + 10, self.y + 10))
         
         if not self.stats:
-            no_data = small_font.render("No data yet...", True, Colors.TEXT_MUTED)
+            no_data = safe_render_text(small_font, "No data yet...", Colors.TEXT_MUTED)
             surface.blit(no_data, (self.x + 10, self.y + 50))
             return
         
@@ -490,11 +502,11 @@ class EnhancedStatsPanel:
         
         for label, value, color in stats_to_show:
             # Label
-            label_surf = small_font.render(label + ":", True, Colors.TEXT_SECONDARY)
+            label_surf = safe_render_text(small_font, label + ":", Colors.TEXT_SECONDARY)
             surface.blit(label_surf, (self.x + 15, y_offset))
             
             # Value
-            value_surf = font.render(value, True, color)
+            value_surf = safe_render_text(font, value, color)
             surface.blit(value_surf, (self.x + self.width - value_surf.get_width() - 15, y_offset - 2))
             
             y_offset += 32
@@ -791,27 +803,20 @@ def run_interactive(models: List[ModelWrapper]):
             info_rect = pygame.Rect(10, info_y - 5, env_width - 20, 60)
             draw_rounded_rect(screen, Colors.BG_CARD, info_rect, 8)
             
-            # Safe text rendering with fallback
-            try:
-                episode_text = big_font.render(f"Episode {episode_count}", True, Colors.TEXT_PRIMARY)
-                screen.blit(episode_text, (20, info_y + 2))
-            except pygame.error:
-                # Font may need reinitialization
-                pygame.font.init()
-                big_font = pygame.font.SysFont('Arial', 18, bold=True)
-                episode_text = big_font.render(f"Episode {episode_count}", True, Colors.TEXT_PRIMARY)
-                screen.blit(episode_text, (20, info_y + 2))
+            # Safe text rendering
+            episode_text = safe_render_text(big_font, f"Episode {episode_count}", Colors.TEXT_PRIMARY)
+            screen.blit(episode_text, (20, info_y + 2))
             
             reward_color = Colors.ACCENT_GREEN if episode_reward > 0 else Colors.ACCENT_RED
-            reward_text = font.render(f"Reward: {episode_reward:.1f}", True, reward_color)
+            reward_text = safe_render_text(font, f"Reward: {episode_reward:.1f}", reward_color)
             screen.blit(reward_text, (150, info_y + 5))
             
-            steps_text = font.render(f"Steps: {episode_steps}", True, Colors.TEXT_SECONDARY)
+            steps_text = safe_render_text(font, f"Steps: {episode_steps}", Colors.TEXT_SECONDARY)
             screen.blit(steps_text, (280, info_y + 5))
             
             # Pause indicator
             if paused:
-                pause_text = title_font.render("⏸ PAUSED", True, Colors.ACCENT_YELLOW)
+                pause_text = safe_render_text(title_font, "⏸ PAUSED", Colors.ACCENT_YELLOW)
                 screen.blit(pause_text, (450, info_y + 5))
             
             # Current config
@@ -822,7 +827,7 @@ def run_interactive(models: List[ModelWrapper]):
             ]
             x_offset = 20
             for text, color in params:
-                surf = small_font.render(text, True, color)
+                surf = safe_render_text(small_font, text, color)
                 screen.blit(surf, (x_offset, info_y + 35))
                 x_offset += surf.get_width() + 25
             
@@ -867,7 +872,7 @@ def run_interactive(models: List[ModelWrapper]):
             msg_rect = pygame.Rect((env_width - 300) // 2, (env_height - 80) // 2, 300, 80)
             draw_rounded_rect(screen, Colors.BG_CARD, msg_rect, 12)
             
-            msg = title_font.render("🔄 Next Episode...", True, Colors.TEXT_PRIMARY)
+            msg = safe_render_text(title_font, "🔄 Next Episode...", Colors.TEXT_PRIMARY)
             msg_rect_text = msg.get_rect(center=(env_width // 2, env_height // 2))
             screen.blit(msg, msg_rect_text)
             
