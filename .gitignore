@@ -2,3 +2,6 @@ logs/*
 .venv
 __pycache__/
 src/__pycache__/
+dqn_accel_models/
+docs
+dcd_models

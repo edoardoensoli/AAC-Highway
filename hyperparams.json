@@ -1,0 +1,32 @@
+{
+  "hardware": {
+    "cpu": "AMD Ryzen 7 5700U with Radeon Graphics",
+    "physical_cores": 8,
+    "logical_cores": 16,
+    "ram_gb": 7.4,
+    "perf_tier": "medium"
+  },
+  "hyperparameters": {
+    "num_envs": 6,
+    "timesteps": 500000,
+    "use_accel": true,
+    "use_fast": true,
+    "lr": 0.0005,
+    "buffer": 100000,
+    "batch_size": 32,
+    "gamma": 0.8,
+    "train_freq": 4,
+    "plr_buffer": 4000,
+    "replay_prob": 0.95,
+    "editor_prob": 0.5,
+    "num_edits": 3,
+    "warmup": 100
+  },
+  "cli_command": "python src/dqn_accel.py --timesteps 500000 --num-envs 6 --lr 0.0005 --batch-size 32 --buffer 100000 --gamma 0.8 --train-freq 4 --plr-buffer 4000 --replay-prob 0.95 --editor-prob 0.5 --num-edits 3 --warmup 100",
+  "estimated_time_minutes": 505.2,
+  "timestamp": "2026-02-06 10:57:13",
+  "benchmark": {
+    "steps_per_second": 9.2,
+    "episodes_per_minute": 37.7
+  }
+}
