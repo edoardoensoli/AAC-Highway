@@ -1,0 +1,82 @@
+[
+  {
+    "config": {
+      "lanes_count": 2,
+      "vehicles_count": 40,
+      "vehicles_density": 2.5,
+      "duration": 40,
+      "simulation_frequency": 30,
+      "policy_frequency": 5,
+      "other_vehicles_type": "highway_env.vehicle.behavior.AggressiveVehicle"
+    },
+    "avg_reward": 6.822779481468163,
+    "std_reward": 3.6907342224267383,
+    "median_reward": 5.237003128483865,
+    "best_reward": 13.731063311750686,
+    "worst_reward": 3.5190727806973667,
+    "crash_rate": 100.0,
+    "survival_rate": 0.0,
+    "avg_ep_length": 8.2,
+    "crashes": 10
+  },
+  {
+    "config": {
+      "lanes_count": 3,
+      "vehicles_count": 18,
+      "vehicles_density": 0.9,
+      "duration": 40,
+      "simulation_frequency": 30,
+      "policy_frequency": 5,
+      "other_vehicles_type": "highway_env.vehicle.behavior.AggressiveVehicle"
+    },
+    "avg_reward": 53.841673091412225,
+    "std_reward": 29.691795693228745,
+    "median_reward": 47.26919042680147,
+    "best_reward": 111.9264418397167,
+    "worst_reward": 18.526538298142295,
+    "crash_rate": 100.0,
+    "survival_rate": 0.0,
+    "avg_ep_length": 55.5,
+    "crashes": 10
+  },
+  {
+    "config": {
+      "lanes_count": 4,
+      "vehicles_count": 28,
+      "vehicles_density": 1.3,
+      "duration": 40,
+      "simulation_frequency": 30,
+      "policy_frequency": 5,
+      "other_vehicles_type": "highway_env.vehicle.behavior.AggressiveVehicle"
+    },
+    "avg_reward": 47.77609778733672,
+    "std_reward": 36.7957407972965,
+    "median_reward": 38.120193710454856,
+    "best_reward": 137.45559419715426,
+    "worst_reward": 11.92961095562255,
+    "crash_rate": 100.0,
+    "survival_rate": 0.0,
+    "avg_ep_length": 50.2,
+    "crashes": 10
+  },
+  {
+    "config": {
+      "lanes_count": 5,
+      "vehicles_count": 22,
+      "vehicles_density": 1.1,
+      "duration": 40,
+      "simulation_frequency": 30,
+      "policy_frequency": 5,
+      "other_vehicles_type": "highway_env.vehicle.behavior.AggressiveVehicle"
+    },
+    "avg_reward": 131.94413745039122,
+    "std_reward": 57.67068702378917,
+    "median_reward": 118.53980774800567,
+    "best_reward": 197.83130307624535,
+    "worst_reward": 38.486722004544504,
+    "crash_rate": 60.0,
+    "survival_rate": 40.0,
+    "avg_ep_length": 134.9,
+    "crashes": 6
+  }
+]

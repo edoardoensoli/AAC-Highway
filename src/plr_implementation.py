@@ -1,217 +1,293 @@
 """
-Prioritized Level Replay (PLR) Implementation for Highway-Env
-Based on Jiang et al. 2021 - https://arxiv.org/abs/2010.03934
+Prioritized Level Replay (PLR) for DQN + Highway-Env
+=====================================================
 
-This implementation is designed to work with Stable Baselines3 DQN.
+Adapted from: https://github.com/facebookresearch/level-replay
+Original paper: Jiang et al. (2021) "Prioritized Level Replay"
+
+This implementation adapts the official PLR algorithm to work with:
+- DQN (instead of PPO)
+- Highway-env (instead of Procgen)
+- Stable Baselines3
 """
 
 import numpy as np
-import gymnasium
-from collections import defaultdict
-from typing import Dict, List, Tuple, Optional
 import torch
+from collections import defaultdict, deque
+from typing import Dict, List, Tuple, Optional
 import pickle
-import os
 
 
-class PLRManager:
+class LevelSampler:
     """
-    Manages curriculum learning using Prioritized Level Replay.
+    Core PLR level sampling logic based on the official implementation.
     
-    Features:
-    - Maintains buffer of high-learning-potential environments
-    - Scores environments based on TD-error or value loss
-    - Implements staleness-aware sampling
-    - Automatic curriculum from easy to hard
+    Key features from official repo:
+    - value_l1: L1 value loss scoring
+    - rank transform: Rank-based prioritization
+    - Staleness correction
+    - Replay vs new level sampling
     """
     
     def __init__(
         self,
-        env_id: str = "highway-v0",
-        train_env_configs: Optional[List[Dict]] = None,
-        score_function: str = 'value_loss',
-        replay_probability: float = 0.8,
-        temperature: float = 0.1,
-        staleness_coef: float = 0.1,
-        buffer_size: int = 100,
+        seeds: List[int],
+        obs_space,
+        action_space,
+        num_actors: int = 1,
+        strategy: str = 'value_l1',
+        replay_schedule: str = 'fixed',
         score_transform: str = 'rank',
+        temperature: float = 0.1,
+        eps: float = 0.05,
+        rho: float = 0.8,  # Replay probability
+        nu: float = 0.5,   # Probability of sampling new unseen level
+        alpha: float = 1.0,
+        staleness_coef: float = 0.1,
+        staleness_transform: str = 'power',
+        staleness_temperature: float = 1.0,
     ):
         """
         Args:
-            env_id: Gymnasium environment ID
-            train_env_configs: List of environment configurations to sample from
-            score_function: How to score levels ('value_loss', 'advantage', 'return')
-            replay_probability: Prob of sampling from buffer vs new level
-            temperature: Temperature for sampling (lower = more greedy)
-            staleness_coef: Weight for staleness bonus
-            buffer_size: Maximum number of levels to track
-            score_transform: How to transform scores before sampling
+            seeds: List of environment configuration indices/seeds
+            obs_space: Observation space
+            action_space: Action space
+            num_actors: Number of parallel environments
+            strategy: Scoring strategy ('value_l1', 'gae', 'one_step_td')
+            replay_schedule: How replay probability changes ('fixed', 'proportional')
+            score_transform: Transform for scores ('rank', 'power', 'softmax')
+            temperature: Softmax temperature for sampling
+            eps: Minimum sampling probability
+            rho: Fixed replay probability
+            nu: Probability of sampling new level when not replaying
+            alpha: Power for power transform
+            staleness_coef: Coefficient for staleness bonus
+            staleness_transform: Transform for staleness ('power', 'constant')
+            staleness_temperature: Temperature for staleness softmax
         """
-        self.env_id = env_id
-        self.score_function = score_function
-        self.replay_prob = replay_probability
-        self.temperature = temperature
-        self.staleness_coef = staleness_coef
-        self.buffer_size = buffer_size
+        self.seeds = seeds
+        self.obs_space = obs_space
+        self.action_space = action_space
+        self.num_actors = num_actors
+        self.strategy = strategy
+        self.replay_schedule = replay_schedule
         self.score_transform = score_transform
+        self.temperature = temperature
+        self.eps = eps
+        self.rho = rho
+        self.nu = nu
+        self.alpha = alpha
+        self.staleness_coef = staleness_coef
+        self.staleness_transform = staleness_transform
+        self.staleness_temperature = staleness_temperature
         
-        # Generate or use provided configs
-        if train_env_configs is None:
-            self.env_configs = self._generate_default_configs()
-        else:
-            self.env_configs = train_env_configs
+        # Level tracking
+        self.unseen_seed_indices = set(range(len(seeds)))
+        self.seed_scores = defaultdict(float)
+        self.seed_staleness = defaultdict(int)
+        self.partial_seed_scores = defaultdict(float)
+        self.partial_seed_steps = defaultdict(int)
         
-        # Tracking structures
-        self.scores = defaultdict(lambda: 1.0)
-        self.staleness = defaultdict(int)
-        self.visit_counts = defaultdict(int)
-        self.seen_level_ids = set()
-        self.level_buffer = []
+        # Statistics
+        self.next_seed_index = 0
+        self.seed_buffer = []  # Top-K seeds by score
         
-        self.global_step = 0
-        self.total_levels = len(self.env_configs)
-        
-        print(f"PLR initialized with {self.total_levels} environment configurations")
+        print(f"PLR LevelSampler initialized:")
+        print(f"  Strategy: {strategy}")
+        print(f"  Score transform: {score_transform}")
+        print(f"  Temperature: {temperature}")
+        print(f"  Staleness coef: {staleness_coef}")
+        print(f"  Replay probability (rho): {rho}")
+        print(f"  Total seeds: {len(seeds)}")
     
-    def _generate_default_configs(self) -> List[Dict]:
-        """Generate diverse highway environment configurations"""
-        configs = []
+    def sample(self, strategy=None) -> Tuple[int, int]:
+        """
+        Sample next level/seed index.
         
-        for lanes in [2, 3, 4]:
-            for density in [0.8, 1.0, 1.5, 2.0]:
-                for vehicles in [15, 20, 25, 30, 35]:
-                    config = {
-                        'lanes_count': lanes,
-                        'vehicles_density': density,
-                        'vehicles_count': vehicles,
-                        'duration': 60,
-                        'simulation_frequency': 30,
-                    }
-                    configs.append(config)
+        Returns:
+            (seed_idx, seed): Tuple of index and actual seed/config
+        """
+        strategy = strategy or self.strategy
         
-        return configs
-    
-    def sample_level(self) -> Tuple[int, Dict]:
-        """Sample next training level using PLR strategy"""
-        self.global_step += 1
-        
-        if len(self.level_buffer) > 0 and np.random.random() < self.replay_prob:
-            level_id = self._sample_from_buffer()
+        # Determine if we replay or sample new
+        if len(self.unseen_seed_indices) == 0:
+            # All seen, always replay
+            replay_decision = 1
+        elif len(self.seed_scores) == 0:
+            # No scores yet, sample new
+            replay_decision = 0
         else:
-            level_id = self._sample_new_level()
+            # Sample replay decision
+            if self.replay_schedule == 'fixed':
+                replay_decision = np.random.binomial(1, self.rho)
+            elif self.replay_schedule == 'proportional':
+                # Anneal as more levels seen
+                seen_ratio = 1.0 - len(self.unseen_seed_indices) / len(self.seeds)
+                replay_prob = self.rho * seen_ratio
+                replay_decision = np.random.binomial(1, replay_prob)
+            else:
+                replay_decision = 1
+        
+        if replay_decision:
+            # Sample from seen levels using scores
+            seed_idx = self._sample_replay_level()
+        else:
+            # Sample new unseen level
+            seed_idx = self._sample_unseen_level()
         
         # Update staleness
-        for lid in self.level_buffer:
-            self.staleness[lid] += 1
-        self.staleness[level_id] = 0
+        for idx in self.seed_scores.keys():
+            self.seed_staleness[idx] += 1
+        self.seed_staleness[seed_idx] = 0
         
-        self.visit_counts[level_id] += 1
-        self.seen_level_ids.add(level_id)
-        
-        return level_id, self.env_configs[level_id]
+        seed = self.seeds[seed_idx]
+        return seed_idx, seed
     
-    def _sample_from_buffer(self) -> int:
-        """Sample level from buffer using prioritization"""
-        weights = []
-        for level_id in self.level_buffer:
-            score = self.scores[level_id]
-            staleness_bonus = self.staleness_coef * self.staleness[level_id]
-            weights.append(score + staleness_bonus)
+    def _sample_replay_level(self) -> int:
+        """Sample from replay distribution using scores + staleness"""
+        if len(self.seed_scores) == 0:
+            # Fallback to unseen
+            return self._sample_unseen_level()
         
-        weights = np.array(weights)
+        # Get scored seeds
+        seed_indices = list(self.seed_scores.keys())
+        scores = np.array([self.seed_scores[idx] for idx in seed_indices])
         
+        # Apply score transform
         if self.score_transform == 'rank':
-            ranks = np.argsort(np.argsort(weights)) + 1
-            weights = ranks
+            # Rank-based (official PLR default)
+            temp = np.flip(scores.argsort())
+            ranks = np.empty_like(temp)
+            ranks[temp] = np.arange(len(temp)) + 1
+            weights = 1 / ranks
         elif self.score_transform == 'power':
-            weights = np.power(weights, 2)
-        
-        if self.temperature > 0:
-            probs = np.exp(weights / self.temperature)
-            probs = probs / np.sum(probs)
+            weights = np.power(scores, self.alpha)
+        elif self.score_transform == 'softmax':
+            weights = np.exp(scores / self.temperature)
         else:
-            probs = np.zeros(len(weights))
-            probs[np.argmax(weights)] = 1.0
+            weights = scores
         
-        idx = np.random.choice(len(self.level_buffer), p=probs)
-        return self.level_buffer[idx]
+        # Add staleness bonus
+        if self.staleness_coef > 0:
+            staleness = np.array([self.seed_staleness[idx] for idx in seed_indices])
+            
+            if self.staleness_transform == 'power':
+                staleness_weights = np.power(staleness, self.alpha)
+            else:
+                staleness_weights = staleness
+            
+            staleness_weights = np.exp(
+                self.staleness_coef * staleness_weights / self.staleness_temperature
+            )
+            weights = weights * staleness_weights
+        
+        # Normalize to probabilities
+        weights = weights / weights.sum()
+        
+        # Ensure minimum probability (from official repo)
+        weights = (1 - self.eps) * weights + self.eps / len(weights)
+        weights = weights / weights.sum()
+        
+        # Sample
+        seed_idx = np.random.choice(seed_indices, p=weights)
+        return seed_idx
     
-    def _sample_new_level(self) -> int:
-        """Sample a new unseen level uniformly"""
-        unseen = [i for i in range(self.total_levels) if i not in self.seen_level_ids]
+    def _sample_unseen_level(self) -> int:
+        """Sample uniformly from unseen levels"""
+        if len(self.unseen_seed_indices) == 0:
+            # All seen, sample from all
+            return np.random.choice(len(self.seeds))
         
-        if len(unseen) > 0:
-            return np.random.choice(unseen)
+        seed_idx = np.random.choice(list(self.unseen_seed_indices))
+        self.unseen_seed_indices.remove(seed_idx)
+        return seed_idx
+    
+    def update_with_rollouts(self, rollouts: Dict[int, Dict]):
+        """
+        Update level scores with rollout data.
+        
+        Args:
+            rollouts: Dict mapping seed_idx -> {
+                'returns': np.array,
+                'values': np.array,
+                'advantages': np.array (optional for GAE),
+            }
+        """
+        for seed_idx, data in rollouts.items():
+            score = self._compute_score(data)
+            
+            # Update score (exponential moving average from official repo)
+            if seed_idx in self.seed_scores:
+                self.seed_scores[seed_idx] = 0.1 * score + 0.9 * self.seed_scores[seed_idx]
+            else:
+                self.seed_scores[seed_idx] = score
+    
+    def _compute_score(self, rollout_data: Dict) -> float:
+        """
+        Compute learning potential score for a level.
+        
+        Based on official repo strategies:
+        - value_l1: L1 value loss (default and most common)
+        - gae: Mean absolute GAE advantage
+        - one_step_td: One-step TD error
+        """
+        returns = rollout_data['returns']
+        values = rollout_data['values']
+        
+        if self.strategy == 'value_l1':
+            # L1 value loss (most common in official repo)
+            score = np.abs(returns - values).mean()
+        
+        elif self.strategy == 'gae':
+            # GAE advantages if available
+            if 'advantages' in rollout_data:
+                advantages = rollout_data['advantages']
+                score = np.abs(advantages).mean()
+            else:
+                # Fallback to value loss
+                score = np.abs(returns - values).mean()
+        
+        elif self.strategy == 'one_step_td':
+            # One-step TD error
+            if 'td_errors' in rollout_data:
+                score = np.abs(rollout_data['td_errors']).mean()
+            else:
+                # Approximate with value loss
+                score = np.abs(returns - values).mean()
+        
         else:
-            return np.random.randint(0, self.total_levels)
-    
-    def update_level_score(
-        self,
-        level_id: int,
-        episode_data: Dict[str, np.ndarray]
-    ):
-        """Update score for a level after collecting episode data"""
+            # Default to value_l1
+            score = np.abs(returns - values).mean()
         
-        advantages = episode_data.get('advantages', np.array([]))
-        values = episode_data.get('values', np.array([]))
-        returns = episode_data.get('returns', np.array([]))
-        
-        if len(advantages) == 0 or len(values) == 0:
-            return
-        
-        # Compute score
-        if self.score_function == 'value_loss':
-            score = np.mean(np.abs(values - returns))
-        elif self.score_function == 'advantage':
-            score = np.mean(np.abs(advantages))
-        elif self.score_function == 'positive_advantage':
-            pos_adv = advantages[advantages > 0]
-            score = np.mean(pos_adv) if len(pos_adv) > 0 else 0.0
-        elif self.score_function == 'return':
-            score = -np.mean(returns)  # Negative because low return = hard
-        else:
-            score = 1.0
-        
-        # Exponential moving average
-        alpha = 0.1
-        self.scores[level_id] = alpha * score + (1 - alpha) * self.scores[level_id]
-        
-        # Update buffer
-        self._update_buffer(level_id)
-    
-    def _update_buffer(self, level_id: int):
-        """Maintain top-K levels by score"""
-        if level_id not in self.level_buffer:
-            self.level_buffer.append(level_id)
-        
-        # Sort by score and trim
-        self.level_buffer.sort(key=lambda l: self.scores[l], reverse=True)
-        self.level_buffer = self.level_buffer[:self.buffer_size]
+        return float(score)
     
     def get_stats(self) -> Dict:
         """Get statistics for logging"""
-        if len(self.scores) == 0:
-            return {}
+        if len(self.seed_scores) == 0:
+            return {
+                'plr/num_seen_seeds': 0,
+                'plr/num_unseen_seeds': len(self.unseen_seed_indices),
+                'plr/mean_score': 0,
+                'plr/max_score': 0,
+            }
         
-        scores_list = list(self.scores.values())
+        scores = list(self.seed_scores.values())
         return {
-            'plr/num_seen_levels': len(self.seen_level_ids),
-            'plr/buffer_size': len(self.level_buffer),
-            'plr/avg_score': np.mean(scores_list),
-            'plr/max_score': np.max(scores_list),
-            'plr/min_score': np.min(scores_list),
-            'plr/seen_fraction': len(self.seen_level_ids) / self.total_levels,
+            'plr/num_seen_seeds': len(self.seed_scores),
+            'plr/num_unseen_seeds': len(self.unseen_seed_indices),
+            'plr/mean_score': np.mean(scores),
+            'plr/max_score': np.max(scores),
+            'plr/min_score': np.min(scores),
+            'plr/std_score': np.std(scores),
         }
     
     def save(self, filepath: str):
         """Save PLR state"""
         state = {
-            'scores': dict(self.scores),
-            'staleness': dict(self.staleness),
-            'visit_counts': dict(self.visit_counts),
-            'seen_level_ids': self.seen_level_ids,
-            'level_buffer': self.level_buffer,
-            'global_step': self.global_step,
+            'seed_scores': dict(self.seed_scores),
+            'seed_staleness': dict(self.seed_staleness),
+            'unseen_seed_indices': self.unseen_seed_indices,
+            'next_seed_index': self.next_seed_index,
         }
         with open(filepath, 'wb') as f:
             pickle.dump(state, f)
@@ -221,25 +297,124 @@ class PLRManager:
         with open(filepath, 'rb') as f:
             state = pickle.load(f)
         
-        self.scores = defaultdict(lambda: 1.0, state['scores'])
-        self.staleness = defaultdict(int, state['staleness'])
-        self.visit_counts = defaultdict(int, state['visit_counts'])
-        self.seen_level_ids = state['seen_level_ids']
-        self.level_buffer = state['level_buffer']
-        self.global_step = state['global_step']
+        self.seed_scores = defaultdict(float, state['seed_scores'])
+        self.seed_staleness = defaultdict(int, state['seed_staleness'])
+        self.unseen_seed_indices = state['unseen_seed_indices']
+        self.next_seed_index = state['next_seed_index']
 
 
-def collect_episode_data(env, model, max_steps=1000):
+class PLRWrapper:
     """
-    Collect episode data for PLR scoring.
+    Wrapper for integrating PLR with Stable Baselines3 DQN.
+    
+    This provides a simple interface similar to the official repo.
+    """
+    
+    def __init__(
+        self,
+        env_configs: List[Dict],
+        strategy: str = 'value_l1',
+        score_transform: str = 'rank',
+        temperature: float = 0.1,
+        rho: float = 0.8,
+        staleness_coef: float = 0.1,
+    ):
+        """
+        Args:
+            env_configs: List of environment configurations
+            strategy: Scoring strategy
+            score_transform: Transform for scores
+            temperature: Softmax temperature
+            rho: Replay probability
+            staleness_coef: Staleness coefficient
+        """
+        self.env_configs = env_configs
+        
+        # Create dummy spaces (highway-env specific)
+        # These are placeholders - actual spaces from env
+        self.obs_space = None
+        self.action_space = None
+        
+        # Initialize level sampler
+        self.level_sampler = LevelSampler(
+            seeds=list(range(len(env_configs))),
+            obs_space=self.obs_space,
+            action_space=self.action_space,
+            strategy=strategy,
+            score_transform=score_transform,
+            temperature=temperature,
+            rho=rho,
+            staleness_coef=staleness_coef,
+        )
+        
+        print(f"\n{'='*60}")
+        print("PLR INITIALIZED")
+        print(f"{'='*60}")
+        print(f"Total configurations: {len(env_configs)}")
+        print(f"Strategy: {strategy}")
+        print(f"Replay probability: {rho}")
+        print(f"{'='*60}\n")
+    
+    def sample_config(self) -> Tuple[int, Dict]:
+        """Sample next configuration"""
+        seed_idx, _ = self.level_sampler.sample()
+        config = self.env_configs[seed_idx]
+        return seed_idx, config
+    
+    def update_with_episode(
+        self,
+        seed_idx: int,
+        returns: np.ndarray,
+        values: np.ndarray,
+        advantages: Optional[np.ndarray] = None
+    ):
+        """
+        Update PLR scores after episode.
+        
+        Args:
+            seed_idx: Configuration index
+            returns: Episode returns
+            values: Value predictions
+            advantages: GAE advantages (optional)
+        """
+        rollout_data = {
+            'returns': returns,
+            'values': values,
+        }
+        
+        if advantages is not None:
+            rollout_data['advantages'] = advantages
+        
+        rollouts = {seed_idx: rollout_data}
+        self.level_sampler.update_with_rollouts(rollouts)
+    
+    def get_stats(self) -> Dict:
+        """Get PLR statistics"""
+        return self.level_sampler.get_stats()
+    
+    def save(self, filepath: str):
+        """Save PLR state"""
+        self.level_sampler.save(filepath)
+    
+    def load(self, filepath: str):
+        """Load PLR state"""
+        self.level_sampler.load(filepath)
+
+
+# Utility function for collecting episode data for PLR
+def collect_episode_for_plr(env, model, max_steps=2000):
+    """
+    Collect episode data needed for PLR scoring.
     
     Returns:
-        episode_data: Dict with 'advantages', 'values', 'returns'
+        Dict with 'returns', 'values', 'advantages'
     """
     obs, _ = env.reset()
     
-    values = []
+    states = []
+    actions = []
     rewards = []
+    values = []
     dones = []
     
     done = truncated = False
@@ -251,18 +426,22 @@ def collect_episode_data(env, model, max_steps=1000):
             obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(model.device)
             value = model.policy.predict_values(obs_tensor)[0].item()
         
-        # Predict action and step
+        # Get action
         action, _ = model.predict(obs, deterministic=False)
+        
+        # Step environment
         next_obs, reward, done, truncated, info = env.step(action)
         
-        values.append(value)
+        states.append(obs)
+        actions.append(action)
         rewards.append(reward)
+        values.append(value)
         dones.append(done or truncated)
         
         obs = next_obs
         steps += 1
     
-    # Compute returns
+    # Compute returns (Monte Carlo)
     returns = []
     R = 0
     for r in reversed(rewards):
@@ -272,67 +451,62 @@ def collect_episode_data(env, model, max_steps=1000):
     returns = np.array(returns)
     values = np.array(values)
     
-    # Compute advantages (simplified GAE)
+    # Compute advantages (TD residual approximation)
     advantages = returns - values
     
     return {
-        'advantages': advantages,
-        'values': values,
         'returns': returns,
+        'values': values,
+        'advantages': advantages,
         'episode_reward': sum(rewards),
         'episode_length': len(rewards),
     }
 
 
-# Example usage
 if __name__ == "__main__":
-    # This shows how to integrate PLR with your DQN training
-    from stable_baselines3 import DQN
+    # Example usage
+    print("PLR Implementation Test")
+    print("="*60)
+    
+    # Create dummy configs
+    configs = []
+    for lanes in [2, 3, 4]:
+        for density in [0.8, 1.0, 1.5, 2.0]:
+            for vehicles in [15, 20, 25, 30]:
+                config = {
+                    'lanes_count': lanes,
+                    'vehicles_density': density,
+                    'vehicles_count': vehicles,
+                }
+                configs.append(config)
+    
+    print(f"Created {len(configs)} configurations")
     
     # Initialize PLR
-    plr = PLRManager(
-        env_id="highway-v0",
-        score_function='value_loss',
-        replay_probability=0.8,
-        temperature=0.1,
+    plr = PLRWrapper(
+        env_configs=configs,
+        strategy='value_l1',
+        score_transform='rank',
+        rho=0.8,
     )
     
-    # Sample first level
-    level_id, config = plr.sample_level()
-    env = gymnasium.make("highway-v0", config=config, render_mode='rgb_array')
-    
-    # Create model
-    model = DQN('MlpPolicy', env, verbose=1)
-    
-    # Training loop
-    total_timesteps = 100000
-    update_interval = 2048
-    
-    timesteps = 0
-    while timesteps < total_timesteps:
-        # Collect episode data
-        episode_data = collect_episode_data(env, model, max_steps=1000)
+    # Simulate sampling
+    print("\nSampling 10 configurations:")
+    for i in range(10):
+        seed_idx, config = plr.sample_config()
+        print(f"  {i+1}. Config {seed_idx}: {config}")
         
-        # Update PLR score
-        plr.update_level_score(level_id, episode_data)
+        # Simulate episode data
+        dummy_returns = np.random.randn(100) * 10
+        dummy_values = np.random.randn(100) * 10
         
-        # Train model
-        model.learn(update_interval, reset_num_timesteps=False)
-        timesteps += update_interval
-        
-        # Sample next level
-        level_id, config = plr.sample_level()
-        env = gymnasium.make("highway-v0", config=config, render_mode='rgb_array')
-        model.set_env(env)
-        
-        # Log stats
-        if timesteps % 10000 == 0:
-            stats = plr.get_stats()
-            print(f"\nTimestep {timesteps}:")
-            print(f"  Episode reward: {episode_data['episode_reward']:.2f}")
-            for key, value in stats.items():
-                print(f"  {key}: {value:.4f}")
+        plr.update_with_episode(seed_idx, dummy_returns, dummy_values)
     
-    # Save trained model and PLR state
-    model.save("highway_dqn_plr/model")
-    plr.save("highway_dqn_plr/plr_state.pkl")
+    # Print stats
+    print("\nPLR Statistics:")
+    stats = plr.get_stats()
+    for key, value in stats.items():
+        print(f"  {key}: {value:.4f}")
+    
+    print("\n" + "="*60)
+    print("Test complete!")
