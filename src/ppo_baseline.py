@@ -35,7 +35,10 @@ env = gymnasium.make(
 )
 
 # Device detection
-if torch.cuda.is_available():
+if torch.backends.mps.is_available():
+    device = "mps"
+    print("Using MPS (Metal Performance Shaders)")
+elif torch.cuda.is_available():
     device = "cuda"
     print("Using CUDA GPU")
 else:
@@ -59,13 +62,13 @@ class TqdmCallback(BaseCallback):
 
 model = PPO('MlpPolicy', env,
               policy_kwargs=dict(net_arch=[256, 256]),
-              learning_rate=5e-4,
+              learning_rate=2e-4,
               n_steps=2048,
               batch_size=64,
               gamma=0.8,
               gae_lambda=0.95,
               clip_range=0.2,
-              ent_coef=0.01,
+              ent_coef=0.05,
               verbose=1,
               tensorboard_log="highway_ppo/",
               device=device)
