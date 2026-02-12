@@ -683,8 +683,8 @@ def watch_agent(model, seeds: List[int], n_episodes: int = 3):
 # ──────────────────────────────────────────────────────────────────────────────
 def main():
     # ====== FLAGS ===========================================================
-    TRAIN           = False
-    SKIP_EVALUATION = True
+    TRAIN           = True
+    SKIP_EVALUATION = False
 
     # Training budget
     TOTAL_TIMESTEPS  = 2_000_000

@@ -9,11 +9,6 @@ Maps integer seeds deterministically to highway-env factors of variation:
   • vehicles_density  ∈ [0.6, 2.0]
   • POLITENESS        ∈ [0.0, 1.0]   (MOBIL lane-change model coefficient)
 
-Custom reward shaping:
-  • Time-to-Collision (TTC) penalty: continuous penalty when TTC < 2.0 s
-    to any forward vehicle in nearby lanes.  Teaches the agent that
-    approaching a vehicle too fast is costly *before* the crash happens.
-
 Observation space:
   • OccupancyGrid (W×H×F) — ego-centric spatial grid encoding presence,
     velocity, and road structure around the agent.
@@ -83,11 +78,6 @@ _REWARD_CFG = {
     "normalize_reward": True,
 }
 
-# ── TTC reward-shaping parameters ──
-TTC_THRESHOLD   = 2.0    # seconds below which penalty kicks in
-TTC_PENALTY_MAX = 0.3    # max penalty per step (at TTC ≈ 0)
-LATERAL_BAND    = 8.0    # metres — only vehicles within ±8 m laterally
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Seed → Factor mapping
@@ -149,59 +139,18 @@ class HighwayLevelWrapper(gym.Wrapper):
 
     1. **POLITENESS** — seed-based MOBIL coefficient for NPC lane-change
        aggressiveness, set at both class and instance level on ``reset()``.
-    2. **TTC penalty** — continuous reward shaping that penalises the agent
-       when the longitudinal time-to-collision to any forward vehicle in
-       nearby lanes drops below ``TTC_THRESHOLD`` seconds.
 
-       Penalty per step = ``-TTC_PENALTY_MAX × (1 − min_ttc / TTC_THRESHOLD)``
-       Linear ramp:  TTC ≥ threshold → 0,  TTC = 0 → −TTC_PENALTY_MAX.
-
-    The wrapper also injects ``level_seed``, ``politeness``, and ``min_ttc``
-    into the ``info`` dict.
+    The wrapper injects ``level_seed`` and ``politeness`` into the ``info`` dict.
     """
 
     def __init__(
         self,
         env: gym.Env,
         seed: int = 0,
-        ttc_threshold: float = TTC_THRESHOLD,
-        ttc_penalty_max: float = TTC_PENALTY_MAX,
-        lateral_band: float = LATERAL_BAND,
     ):
         super().__init__(env)
         self._level_seed = seed
         self._factors = seed_to_factors(seed)
-        self._ttc_threshold = ttc_threshold
-        self._ttc_penalty_max = ttc_penalty_max
-        self._lateral_band = lateral_band
-
-    # ── TTC computation ──────────────────────────────────────────────────
-
-    def _compute_min_ttc(self) -> float:
-        """Minimum longitudinal TTC to vehicles *ahead* in nearby lanes."""
-        ego = self.unwrapped.vehicle
-        min_ttc = float("inf")
-
-        for other in self.unwrapped.road.vehicles:
-            if other is ego:
-                continue
-            # Only vehicles within the lateral band (≈ 2 lane widths)
-            if abs(other.position[1] - ego.position[1]) > self._lateral_band:
-                continue
-            # Forward gap only (other is ahead of ego)
-            dx = other.position[0] - ego.position[0]
-            if dx <= 0:
-                continue
-            # Closing speed (positive ⇒ ego is catching up)
-            closing = ego.velocity[0] - other.velocity[0]
-            if closing <= 1e-6:
-                continue
-            # Bumper-to-bumper gap
-            gap = max(0.0, dx - (ego.LENGTH + other.LENGTH) / 2)
-            ttc = gap / closing if gap > 0 else 0.0
-            min_ttc = min(min_ttc, ttc)
-
-        return min_ttc
 
     # ── Gymnasium API ────────────────────────────────────────────────────
 
@@ -223,23 +172,6 @@ class HighwayLevelWrapper(gym.Wrapper):
 
     def step(self, action):
         obs, reward, done, truncated, info = super().step(action)
-
-        # ── TTC penalty (only while episode is alive) ──
-        if not (done or truncated):
-            min_ttc = self._compute_min_ttc()
-            if min_ttc < self._ttc_threshold:
-                ttc_penalty = -self._ttc_penalty_max * (
-                    1.0 - min_ttc / self._ttc_threshold
-                )
-                reward += ttc_penalty
-                info["ttc_penalty"] = float(ttc_penalty)
-            else:
-                info["ttc_penalty"] = 0.0
-            info["min_ttc"] = float(min_ttc)
-        else:
-            info["ttc_penalty"] = 0.0
-            info["min_ttc"] = 0.0
-
         return obs, reward, done, truncated, info
 
     def set_level(self, seed: int):
