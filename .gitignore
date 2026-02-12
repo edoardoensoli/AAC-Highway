@@ -5,3 +5,6 @@ src/__pycache__/
 dqn_accel_models/
 docs
 dcd_models
+dqn_*
+ppo_*
+*.log

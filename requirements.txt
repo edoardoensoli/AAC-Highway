@@ -1,8 +1,21 @@
-# Highway Environment and dependencies
-highway-env==1.10.2
+# Core dependencies
 gymnasium==1.2.3
 numpy==2.4.1
-pygame==2.6.1
-matplotlib==3.10.8
 pandas==2.3.3
 scipy==1.17.0
+
+# Reinforcement Learning and DQN/PPO
+stable-baselines3>=1.8.0
+torch>=2.0.0
+tqdm>=4.66.0
+
+# Highway Environment
+highway-env==1.10.2
+
+# Visualization and UI
+matplotlib==3.10.8
+pygame==2.6.1
+seaborn>=0.13.0
+
+# System utilities
+psutil>=5.9.0

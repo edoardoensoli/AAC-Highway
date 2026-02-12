@@ -1,0 +1,8 @@
+{
+  "total_episodes": 165,
+  "total_steps": 5120,
+  "final_stage": 0,
+  "best_mean_reward": -3.4011340800000003,
+  "stage_history": [],
+  "timestamp": "2026-02-12T18:05:56.621076"
+}

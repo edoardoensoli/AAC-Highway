@@ -1,0 +1,100 @@
+{
+  "algorithm": "PPO",
+  "method": "Curriculum",
+  "env_id": "highway-fast-v0",
+  "timesteps": 5000,
+  "num_envs": 2,
+  "stages": [
+    {
+      "name": "Stage 0 \u2014 Facile (2L, 5 auto)",
+      "config": {
+        "vehicles_count": 5,
+        "vehicles_density": 0.8,
+        "lanes_count": 2,
+        "initial_spacing": 2.0,
+        "duration": 30,
+        "other_vehicles_type": "highway_env.vehicle.behavior.IDMVehicle"
+      },
+      "threshold": 0.7
+    },
+    {
+      "name": "Stage 1 \u2014 Medio (2L, 12 auto)",
+      "config": {
+        "vehicles_count": 12,
+        "vehicles_density": 1.0,
+        "lanes_count": 2,
+        "initial_spacing": 2.0,
+        "duration": 40,
+        "other_vehicles_type": "highway_env.vehicle.behavior.IDMVehicle"
+      },
+      "threshold": 0.65
+    },
+    {
+      "name": "Stage 2 \u2014 3 corsie (3L, 15 auto)",
+      "config": {
+        "vehicles_count": 15,
+        "vehicles_density": 1.0,
+        "lanes_count": 3,
+        "initial_spacing": 2.0,
+        "duration": 40,
+        "other_vehicles_type": "highway_env.vehicle.behavior.IDMVehicle"
+      },
+      "threshold": 0.6
+    },
+    {
+      "name": "Stage 3 \u2014 Denso (3L, 25 auto)",
+      "config": {
+        "vehicles_count": 25,
+        "vehicles_density": 1.2,
+        "lanes_count": 3,
+        "initial_spacing": 1.5,
+        "duration": 50,
+        "other_vehicles_type": "highway_env.vehicle.behavior.IDMVehicle"
+      },
+      "threshold": 0.55
+    },
+    {
+      "name": "Stage 4 \u2014 Aggressivo (3L, 25 auto, agg)",
+      "config": {
+        "vehicles_count": 25,
+        "vehicles_density": 1.2,
+        "lanes_count": 3,
+        "initial_spacing": 1.5,
+        "duration": 50,
+        "other_vehicles_type": "highway_env.vehicle.behavior.AggressiveIDMVehicle"
+      },
+      "threshold": 0.5
+    },
+    {
+      "name": "Stage 5 \u2014 Estremo (4L, 35 auto, agg)",
+      "config": {
+        "vehicles_count": 35,
+        "vehicles_density": 1.5,
+        "lanes_count": 4,
+        "initial_spacing": 1.0,
+        "duration": 60,
+        "other_vehicles_type": "highway_env.vehicle.behavior.AggressiveIDMVehicle"
+      },
+      "threshold": 0.45
+    }
+  ],
+  "ppo": {
+    "lr": 0.0003,
+    "n_steps": 512,
+    "batch_size": 64,
+    "n_epochs": 4,
+    "gamma": 0.95,
+    "gae_lambda": 0.95,
+    "clip_range": 0.2,
+    "ent_coef": 0.05,
+    "vf_coef": 0.5,
+    "net_arch": [
+      256,
+      256
+    ]
+  },
+  "eval_interval": 9999,
+  "review_interval": 9999,
+  "seed": 42,
+  "timestamp": "2026-02-12T18:04:06.913461"
+}
