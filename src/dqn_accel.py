@@ -423,13 +423,13 @@ class ACCELGenerator:
     #   Per-step reward = collision_reward * crashed
     #                   + high_speed_reward * speed_fraction
     #
-    #   Guida normale ~25 m/s: +0.2/step
-    #   Guida perfetta 30 m/s: +0.4/step
+    #   Guida normale ~25 m/s: +0.15/step (speed_frac ≈ 0.5)
+    #   Guida perfetta 30 m/s: +0.3/step  (speed_frac = 1.0)
     #   Collisione:            -10.0 + episodio TERMINA
     #
     #   Con gamma=0.95, episodio 60 step (Stage 0: 30s×2Hz):
-    #     Return max scontato ≈ 0.4 * Σ(0.95^t, t=0..59) ≈ 7.6
-    #     Return normale    ≈ 0.2 * 18.9 ≈ 3.8
+    #     Return max scontato ≈ 0.3 * Σ(0.95^t, t=0..59) ≈ 5.7
+    #     Return normale    ≈ 0.15 * 18.9 ≈ 2.8
     #     Crash = -10.0 istantaneo + perdita reward future
     #     Crash a step 5:  ~-10.0 + earned(~1.0) = -9.0 vs survive(3.8) → gap 12.8
     #     Crash a step 30: ~-10.0 * 0.95^30 + earned(2.9) = -0.2 vs survive(3.8)
@@ -441,7 +441,7 @@ class ACCELGenerator:
     FIXED_PARAMS = {
         'policy_frequency': 2,
         'collision_reward': -10.0,        # Penalità MOLTO FORTE per crash: il segnale più chiaro
-        'high_speed_reward': 0.4,         # Incentivo velocità: vai veloce = supera le auto
+        'high_speed_reward': 0.3,         # Allineato a baseline (0.3): confronto equo
         'right_lane_reward': 0.0,         # DISABILITATO: era rumore, spingeva verso corsia lenta
         'lane_change_reward': 0.0,        # Neutrale: cambi corsia liberi
         'reward_speed_range': [20, 30],
@@ -462,7 +462,7 @@ class ACCELGenerator:
             },
             'absolute': False,             # Posizioni RELATIVE all'ego (default, più facile da imparare)
             'normalize': True,             # Normalizzato in [-1, 1]
-            'see_behind': False,            # SPECCHIETTO: vede chi arriva da dietro per cambi corsia sicuri
+            'see_behind': True,             # SPECCHIETTO: vede chi arriva da dietro per cambi corsia sicuri
             'order': 'sorted',             # Ordinati per distanza
         },
         # other_vehicles_type è ORA per-stage: IDM (prevedibile) → Aggressive (caotico)
@@ -475,24 +475,23 @@ class ACCELGenerator:
     # L'agente deve padroneggiare uno stage prima di passare al successivo.
     # ACCEL muta livelli ATTORNO allo stage corrente per esplorare la frontiera.
     #
-    # DESIGN KEY v4: Stage 0 su 2 corsie per forzare interazione, poi subito 3
-    # corsie. Aggiungere più auto su 2 corsie è un vicolo cieco: la strada è
-    # satura e l'agente non ha dove andare. 3 corsie = nuova abilità reale
-    # (navigazione multi-corsia) e più spazio per manovrare con traffico denso.
+    # DESIGN KEY v5: Veicoli aggressivi introdotti PRIMA (Stage 3) per rafforzare
+    # la robustezza. L'agente impara a gestire l'imprevedibilità su traffico moderato,
+    # poi affronta traffico denso CON veicoli già aggressivi → più resiliente.
     #
-    # REGOLA FERREA: cambiare UNA SOLA variabile alla volta tra stage.
-    # (v3 violava questa regola in Stage 3: density+duration insieme → stallo)
+    # REGOLA FERREA: cambiare UNA SOLA variabile alla volta tra stage consecutivi.
     #
-    # Progressione:
-    #   Stage 0: 2 corsie, poche auto → impara la meccanica base (schivare)
-    #   Stage 1: 3 corsie, stesse auto → impara navigazione multi-corsia
-    #   Stage 2: 3 corsie, più auto   → gestisce traffico su 3 corsie
-    #   Stage 3: 3 corsie, densità+   → traffico più fitto
-    #   Stage 4: 3 corsie, durata+    → sopravvive a lungo
-    #   Stage 5: 3 corsie, aggressive → gestisce imprevedibilità
-    #   Stage 6: 4 corsie, denso+aggressivo → scenario complesso
+    # Progressione (8 stage):
+    #   Stage 0: 2 corsie, poche auto IDM → impara la meccanica base (schivare)
+    #   Stage 1: 3 corsie, poche auto IDM → impara navigazione multi-corsia
+    #   Stage 2: 3 corsie, più auto IDM → gestisce traffico moderato
+    #   Stage 3: 3 corsie, auto AGGRESSIVE → impara imprevedibilità SUBITO
+    #   Stage 4: 3 corsie, aggressive + denso → traffico fitto con aggressivi
+    #   Stage 5: 3 corsie, aggressive + lungo → sopravvive a lungo con aggressivi
+    #   Stage 6: 3 corsie, aggressive + più auto → traffico intenso
+    #   Stage 7: 4 corsie, aggressive + denso + lungo → scenario finale complesso
     DIFFICULTY_STAGES = [
-        {   # Stage 0: 2 corsie, 8 auto — IMPARA A SCHIVARE
+        {   # Stage 0: 2 corsie, 8 auto IDM — IMPARA A SCHIVARE
             # 2 corsie + 8 macchine = incontri frequenti, DEVE cambiare corsia.
             # Durata corta (30s = max 60 step) = facile sopravvivere.
             'vehicles_count': 8, 'vehicles_density': 0.8,
@@ -507,36 +506,47 @@ class ACCELGenerator:
             'lanes_count': 3, 'initial_spacing': 2.0, 'duration': 30,
             'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
         },
-        {   # Stage 2: 3 corsie, PIÙ auto — traffico moderato su 3 corsie
+        {   # Stage 2: 3 corsie, PIÙ auto IDM — traffico moderato su 3 corsie
             # Ora che sa navigare su 3 corsie, aumenta il traffico.
             # UNA variabile: vehicles_count 8 → 15.
             'vehicles_count': 15, 'vehicles_density': 0.8,
             'lanes_count': 3, 'initial_spacing': 2.0, 'duration': 30,
             'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
         },
-        {   # Stage 3: 3 corsie, DENSITÀ AUMENTATA — traffico più fitto
-            # Stesse auto e durata, ma più vicine tra loro.
+        {   # Stage 3: 3 corsie, auto AGGRESSIVE — impara imprevedibilità
+            # CHIAVE: introduce veicoli aggressivi SU TRAFFICO MODERATO.
+            # Stesse 15 auto, stessa densità (0.8), ma comportamento imprevedibile.
+            # L'agente impara prima a gestire cambi corsia improvvisi in condizioni
+            # controllate, poi affronterà traffico denso con questa abilità.
+            # UNA variabile: IDMVehicle → AggressiveVehicle.
+            'vehicles_count': 15, 'vehicles_density': 0.8,
+            'lanes_count': 3, 'initial_spacing': 2.0, 'duration': 30,
+            'other_vehicles_type': 'highway_env.vehicle.behavior.AggressiveVehicle',
+        },
+        {   # Stage 4: 3 corsie, aggressive + DENSITÀ AUMENTATA — traffico più fitto
+            # Ora che gestisce veicoli aggressivi, aumenta la densità.
             # UNA variabile: vehicles_density 0.8 → 1.0.
             'vehicles_count': 15, 'vehicles_density': 1.0,
             'lanes_count': 3, 'initial_spacing': 2.0, 'duration': 30,
-            'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
+            'other_vehicles_type': 'highway_env.vehicle.behavior.AggressiveVehicle',
         },
-        {   # Stage 4: 3 corsie, DURATA AUMENTATA — sopravvivere a lungo
-            # Ora che gestisce traffico denso, deve farlo PIÙ A LUNGO.
+        {   # Stage 5: 3 corsie, aggressive + DURATA AUMENTATA — sopravvive a lungo
+            # Ora che gestisce traffico denso con aggressivi, deve farlo PIÙ A LUNGO.
             # UNA variabile: duration 30 → 50.
             'vehicles_count': 15, 'vehicles_density': 1.0,
             'lanes_count': 3, 'initial_spacing': 2.0, 'duration': 50,
-            'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
+            'other_vehicles_type': 'highway_env.vehicle.behavior.AggressiveVehicle',
         },
-        {   # Stage 5: 3 corsie, traffico AGGRESSIVO — imprevedibilità
-            # Stesse condizioni ma macchine aggressive: cambi corsia improvvisi.
-            # UNA variabile: IDMVehicle → AggressiveVehicle (+ più auto).
+        {   # Stage 6: 3 corsie, aggressive + PIÙ AUTO — traffico intenso
+            # Aumenta il numero di veicoli aggressivi.
+            # UNA variabile: vehicles_count 15 → 20.
             'vehicles_count': 20, 'vehicles_density': 1.0,
             'lanes_count': 3, 'initial_spacing': 1.5, 'duration': 50,
             'other_vehicles_type': 'highway_env.vehicle.behavior.AggressiveVehicle',
         },
-        {   # Stage 6: 4 corsie, denso + aggressivo + lungo — scenario finale
-            # Scenario complesso: tante auto, aggressività, lunga durata.
+        {   # Stage 7: 4 corsie, aggressive + denso + lungo — scenario finale
+            # Scenario complesso: 4 corsie, tante auto, aggressività, lunga durata.
+            # DUE variabili (finale): lanes_count 3 → 4, vehicles_count 20 → 30, density 1.0 → 1.5.
             'vehicles_count': 30, 'vehicles_density': 1.5,
             'lanes_count': 4, 'initial_spacing': 1.5, 'duration': 60,
             'other_vehicles_type': 'highway_env.vehicle.behavior.AggressiveVehicle',
@@ -1359,13 +1369,15 @@ def train_dqn_accel(
     batch_size: int = 64,
     gamma: float = 0.95,
     train_freq: int = 4,
-    gradient_steps: int = 8,
+    gradient_steps: int = 4,             # 4 = buon trade-off efficienza/stabilità con multi-env
     target_update_interval: int = 250,   # Allineato a baseline (50 era troppo aggressivo)
     exploration_fraction: float = 0.3,   # 30% dei timestep in esplorazione
     exploration_final_eps: float = 0.05,
     net_arch: Optional[List[int]] = None,
-    # Generale
+    # Salvataggio
     save_dir: str = './dqn_accel_models',
+    save_interval: int = 50_000,
+    # Generale
     device: str = 'auto',
     seed: int = 42,
     verbose: int = 1,
@@ -1538,7 +1550,7 @@ def train_dqn_accel(
         max_episodes_per_stage=max_episodes_per_stage,
         log_interval=25,
         save_dir=str(save_path),
-        save_interval=25000,
+        save_interval=save_interval,
         use_fast_env=use_fast_env,
         verbose=verbose,
         start_stage=effective_start,
@@ -1616,7 +1628,7 @@ def train_dqn_accel(
 
 def evaluate_model(
     model_path: str,
-    n_episodes: int = 50,
+    n_episodes: int = 10,
     device: str = 'auto',
     render: bool = True,
     use_metrics_tracker: bool = True,
@@ -1636,11 +1648,11 @@ def evaluate_model(
     test_configs = [
         {
             'name': 'Easy (Stage 0)',
-            'config': {**fixed, 'lanes_count': 3, 'vehicles_count': 10, 'vehicles_density': 0.8, 'duration': 40},
+            'config': {**fixed, 'lanes_count': 2, 'vehicles_count': 10, 'vehicles_density': 0.8, 'duration': 40},
         },
         {
             'name': 'Medium (Stage 2)',
-            'config': {**fixed, 'lanes_count': 4, 'vehicles_count': 22, 'vehicles_density': 1.0, 'duration': 60},
+            'config': {**fixed, 'lanes_count': 3, 'vehicles_count': 15, 'vehicles_density': 1.0, 'duration': 60},
         },
         {
             'name': 'Hard (Stage 4)',
@@ -1804,6 +1816,8 @@ Esempi:
     # Generale
     parser.add_argument('--save-dir', type=str, default='./dqn_accel_models',
                         help='Directory per salvare (default: ./dqn_accel_models)')
+    parser.add_argument('--save-interval', type=int, default=50_000,
+                        help='Salva checkpoint ogni N step (default: 50000)')
     parser.add_argument('--device', type=str, default='auto', choices=['auto', 'cpu', 'cuda'],
                         help='Device (default: auto)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
@@ -1812,7 +1826,7 @@ Esempi:
     # Evaluation
     parser.add_argument('--eval-only', type=str, default=None,
                         help='Path al modello per sola valutazione')
-    parser.add_argument('--eval-episodes', type=int, default=50,
+    parser.add_argument('--eval-episodes', type=int, default=4,
                         help='Episodi di valutazione (default: 50)')
 
     # Config file
@@ -1867,6 +1881,7 @@ Esempi:
             gamma=args.gamma,
             train_freq=args.train_freq,
             save_dir=args.save_dir,
+            save_interval=args.save_interval,
             device=args.device,
             seed=args.seed,
             verbose=args.verbose,

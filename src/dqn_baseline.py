@@ -12,18 +12,26 @@ import gymnasium
 import highway_env
 import torch
 import numpy as np
+import time
 from stable_baselines3 import DQN
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
+from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.monitor import Monitor
 from pathlib import Path
 from tqdm import tqdm
 from datetime import datetime
 import json
 
 
-TRAIN = True
-TOTAL_TIMESTEPS = 200_000
+TRAIN = False
+TOTAL_TIMESTEPS = 500_000
+MODEL_NAME = f'dqn_baseline_{TOTAL_TIMESTEPS//1000}k' 
 SAVE_DIR = Path("highway_dqn")
+NUM_ENVS = 4                # Env paralleli (SubprocVecEnv) — sfrutta multi-core
+RENDER_DELAY_MS = 200       # Delay tra i frame durante rendering (ms): 100ms = ~10 FPS (lento & leggibile)
 
+
+print("model name:", MODEL_NAME)
 # =============================================================================
 #  ENV CONFIG — Allineata a ACCEL FIXED_PARAMS
 # =============================================================================
@@ -31,30 +39,49 @@ SAVE_DIR = Path("highway_dqn")
 # per garantire che la baseline e ACCEL siano confrontabili.
 
 ENV_CONFIG = {
-    "lanes_count": 4,
-    "vehicles_count": 25,
-    "vehicles_density": 1,
+    "lanes_count": 3,
+    "vehicles_count": 12,
+    "vehicles_density": 0.8,
     "duration": 60,                    # 60 secondi per episodio
     "policy_frequency": 2,             # 2 decisioni/sec — reazione rapida per frenare
-    "collision_reward": -5.0,          # Penalità FORTE per crash
-    "high_speed_reward": 0.4,          # Incentivo velocità: fino a +0.4/step a 30 m/s
-    "right_lane_reward": 0.1,          # Bonus corsia destra: +0.1/step
+    "collision_reward": -10.0,          # Penalità FORTE per crash (-10.0, non -5!)
+    "high_speed_reward": 0.3,          # Incentivo velocità: fino a +0.3/step a 30 m/s
+    "right_lane_reward": 0.0,          # Nessun bonus corsia destra
     "lane_change_reward": 0,           # Neutrale: cambi corsia non penalizzati
     "reward_speed_range": [20, 30],
-    "normalize_reward": False,         # RAW rewards: crash = -5.0 (penalità vera)
+    "normalize_reward": False,         # RAW rewards: crash = -10.0 (penalità vera)
     "other_vehicles_type": "highway_env.vehicle.behavior.IDMVehicle",
 }
 
+# Observation ACCEL-compatibile — usata per training E valutazione.
+# Il modello trainato con questa observation si aspetta shape (7,5),
+# quindi anche l'env di valutazione DEVE usarla.
+ACCEL_OBSERVATION = {
+    "type": "Kinematics",
+    "vehicles_count": 7,           # Ego + 6 altri (default: 5 = troppo pochi)
+    "features": ["presence", "x", "y", "vx", "vy"],
+    "features_range": {
+        "x": [-100, 100],
+        "y": [-100, 100],
+        "vx": [-20, 20],
+        "vy": [-20, 20],
+    },
+    "absolute": False,             # Posizioni relative all'ego
+    "normalize": True,             # Normalizzato in [-1, 1]
+    "see_behind": True,            # Specchietto: vede veicoli dietro
+    "order": "sorted",             # Ordinati per distanza
+}
+
 # Reward con normalize_reward=False (allineata a ACCEL FIXED_PARAMS):
-#   Per step: collision_reward * crashed + high_speed * frac + right_lane * frac
-#   - Guida normale 25 m/s:      +0.25 + 0.0 = +0.25/step
-#   - Guida perfetta 30 m/s dx:  +0.4  + 0.1 = +0.5/step
-#   - Collisione:                -5.0 + episodio TERMINA
+#   Per step: collision_reward * crashed + high_speed_reward * speed_frac
+#   - Guida normale 25 m/s:      +0.15/step  (speed_frac ≈ 0.5)
+#   - Guida perfetta 30 m/s:     +0.3/step   (speed_frac = 1.0)
+#   - Collisione:                -10.0 + episodio TERMINA
 #
 # Con gamma=0.9, episodio 120 step (60s × 2 Hz):
-#   - Return max scontato ≈ 5.0
-#   - Crash = -5.0 istantaneo + reward future perse ≈ -7.5 totale
-#   - Ratio penalità/ritorno = 150% → segnale FORTE per evitare collisioni
+#   - Return max scontato ≈ 3.0  (Σ 0.3 * 0.9^t)
+#   - Crash = -10.0 istantaneo → domina il segnale
+#   - Ratio penalità/ritorno ≈ 333% → rischio Q instabili se exploration troppo alta
 
 
 # =============================================================================
@@ -71,7 +98,7 @@ class TqdmCallback(BaseCallback):
         self.pbar = tqdm(total=self.locals['total_timesteps'], unit="step")
 
     def _on_step(self):
-        self.pbar.update(1)
+        self.pbar.update(self.training_env.num_envs)
         return True
 
     def _on_training_end(self):
@@ -141,190 +168,219 @@ class BestModelCallback(BaseCallback):
 
 
 # =============================================================================
-#  SETUP
+#  ENV FACTORY — Necessario per SubprocVecEnv (ogni env in un processo)
 # =============================================================================
 
-# Device
-if torch.cuda.is_available():
-    device = "cuda"
-    print("Using CUDA GPU")
-else:
-    device = "cpu"
-    print("Using CPU")
-
-# Env per training (senza render per velocità)
-env = gymnasium.make("highway-fast-v0", config=ENV_CONFIG)
-
-# Stampa configurazione
-print(f"\n{'='*60}")
-print(f"  DQN Baseline — highway-fast-v0")
-print(f"{'='*60}")
-print(f"  Timesteps:     {TOTAL_TIMESTEPS:,}")
-print(f"  Duration:      {ENV_CONFIG['duration']}s → {ENV_CONFIG['duration'] * ENV_CONFIG['policy_frequency']} step max")
-print(f"  Policy freq:   {ENV_CONFIG['policy_frequency']} Hz")
-print(f"  Vehicles:      {ENV_CONFIG['vehicles_count']} (density={ENV_CONFIG['vehicles_density']})")
-print(f"  Reward:        raw (normalize=False)")
-print(f"  Collision:     → reward=-5.0 + episode terminates")
-print(f"  High speed:    → up to +0.4 per step")
-print(f"  Right lane:    → up to +0.1 per step")
-print(f"{'='*60}\n")
+def make_env(rank: int, seed: int = 42, config: dict = None):
+    """Crea un singolo env wrappato con Monitor (necessario per stats episodio)."""
+    env_config = config or ENV_CONFIG
+    def _init():
+        env = gymnasium.make("highway-fast-v0", config=env_config)
+        env = Monitor(env)
+        env.reset(seed=seed + rank)
+        return env
+    return _init
 
 
 # =============================================================================
-#  DQN MODEL
-# =============================================================================
-# Parametri ottimizzati per highway-env con reward raw (normalize_reward=False):
-#
-# gamma=0.9 è il punto ideale:
-#   - Orizzonte effettivo: ~10 step (5 secondi a 2 Hz)
-#   - Q-values range: [-5, +5] (gestibile per la rete neurale)
-#   - Crash = -5.0 istantaneo + reward future perse ≈ -7.5 totale
-#   - Guida sicura 120 step: return scontato ≈ 5.0
-#   - Ratio penalità/ritorno = 150% → segnale forte per evitare crash
-#
-# train_freq=4: con single-env, aggiorna più spesso per efficienza
-# target_update_interval=250: target network stabile (50 era troppo aggressivo)
-
-model = DQN('MlpPolicy', env,
-    policy_kwargs=dict(net_arch=[256, 256]),
-    learning_rate=5e-4,
-    buffer_size=50_000,         # Proporzionato a 200k step (25% del training)
-    learning_starts=500,        # Inizia presto ma con un po' di dati
-    batch_size=64,
-    gamma=0.9,                  # Q-values moderati, training stabile
-    train_freq=4,               # 1 update ogni 4 step (efficiente per single-env)
-    gradient_steps=1,
-    target_update_interval=250, # Target network aggiornata ogni 250 update (stabile)
-    exploration_fraction=0.5,   # Esplora per metà del training (100k step)
-    exploration_final_eps=0.05, # 5% exploration residua
-    verbose=1,
-    tensorboard_log=str(SAVE_DIR),
-    device=device,
-)
-
-
-# =============================================================================
-#  TRAINING
+#  MAIN — guard __name__ obbligatorio per SubprocVecEnv su Windows (spawn)
 # =============================================================================
 
-if TRAIN:
-    SAVE_DIR.mkdir(parents=True, exist_ok=True)
+def main():
+    # Device
+    if torch.cuda.is_available():
+        device = "cuda"
+        print("Using CUDA GPU")
+    else:
+        device = "cpu"
+        print("Using CPU")
 
-    callbacks = [
-        TqdmCallback(),
-        # Checkpoint periodico ogni 25k step (safety net)
-        CheckpointCallback(
-            save_freq=25_000,
-            save_path=str(SAVE_DIR),
-            name_prefix="dqn_checkpoint",
-            save_replay_buffer=False,
-            save_vecnormalize=False,
-        ),
-        # Salva il miglior modello (protezione contro collapse)
-        BestModelCallback(
-            save_path=str(SAVE_DIR),
-            check_freq=500,     # Controlla ogni 500 step
-            window=30,          # Media su ultimi 30 episodi
-            verbose=1,
-        ),
-    ]
+    # Config di training: aggiunge observation ACCEL-compatibile se TRAIN=True
+    # Questo rende il modello pre-trainato compatibile con dqn_accel.py
+    if TRAIN:
+        train_config = {**ENV_CONFIG, "observation": ACCEL_OBSERVATION}
+        print("  Observation:   ACCEL-compatibile (7 veicoli, see_behind=True)")
+    else:
+        train_config = ENV_CONFIG
+        print("  Observation:   default (modello già trainato)")
 
-    model.learn(TOTAL_TIMESTEPS, callback=callbacks)
-    model.save(str(SAVE_DIR / "model_v2"))
-    print(f"\n✓ Modello finale salvato: {SAVE_DIR}/model_v2.zip")
-    print(f"  (usa {SAVE_DIR}/best_model.zip per il miglior modello)")
+    # Env per training — SubprocVecEnv: ogni env in un processo separato
+    print(f"\nCreating {NUM_ENVS} parallel environments (SubprocVecEnv)...")
+    env = SubprocVecEnv([make_env(i, config=train_config) for i in range(NUM_ENVS)])
 
+    # Stampa configurazione
+    max_steps = ENV_CONFIG['duration'] * ENV_CONFIG['policy_frequency']
+    print(f"\n{'='*60}")
+    print(f"  DQN Baseline — highway-fast-v0 × {NUM_ENVS} envs")
+    print(f"{'='*60}")
+    print(f"  Timesteps:     {TOTAL_TIMESTEPS:,}")
+    print(f"  Parallel envs: {NUM_ENVS} (SubprocVecEnv)")
+    print(f"  Duration:      {ENV_CONFIG['duration']}s → {max_steps} step max")
+    print(f"  Policy freq:   {ENV_CONFIG['policy_frequency']} Hz")
+    print(f"  Vehicles:      {ENV_CONFIG['vehicles_count']} (density={ENV_CONFIG['vehicles_density']})")
+    print(f"  Reward:        raw (normalize=False)")
+    print(f"  Collision:     → reward={ENV_CONFIG['collision_reward']} + episode terminates")
+    print(f"  High speed:    → up to +{ENV_CONFIG['high_speed_reward']}/step")
+    print(f"{'='*60}\n")
 
-# =============================================================================
-#  VALUTAZIONE
-# =============================================================================
+    # =================================================================
+    #  DQN MODEL
+    # =================================================================
+    # Ottimizzazioni vs versione precedente (single-env):
+    #
+    # buffer_size  50k → 100k : più dati da 4 env paralleli
+    # batch_size   64  → 128  : gradient estimate più stabile
+    # gradient_steps 1 → 2    : più update per step (sample-efficient)
+    # exploration_fraction 0.5 → 0.25 :
+    #   PRIMA: epsilon min a 100k step → a 18k epsilon ≈ 0.83 (QUASI RANDOM!)
+    #   ORA:   epsilon min a  50k step → a 18k epsilon ≈ 0.64 (ancora esplorativo,
+    #          ma l'agente sfrutta già ciò che ha imparato)
+    # learning_starts 500 → 1000 : raccoglie dati più diversi prima di trainare
 
-# Carica il MIGLIOR modello (non l'ultimo, che potrebbe aver collassato)
-best_path = SAVE_DIR / "best_model.zip"
-final_path = SAVE_DIR / "model_v2.zip"
-load_path = best_path if best_path.exists() else final_path
-
-print(f"\n{'='*60}")
-print(f"  VALUTAZIONE: {load_path}")
-print(f"{'='*60}\n")
-
-model = DQN.load(str(load_path), device=device)
-
-# Env di valutazione con render
-eval_env = gymnasium.make("highway-fast-v0", config=ENV_CONFIG, render_mode='rgb_array')
-
-try:
-    from metrics_tracker import evaluate as mt_evaluate
-
-    metrics_to_use = {
-        'collision_rate',
-        'survival_rate',
-        'avg_reward',
-        'cars_overtaken',
-        'total_cars_overtaken',
-        'avg_speed',
-        'max_speed',
-        'distance_traveled',
-        'lane_changes',
-    }
-
-    results = mt_evaluate(
-        model=model,
-        env=eval_env,
-        n_episodes=10,
-        metrics=metrics_to_use,
-        render=True,
-        verbose=True,
-        seed=42,
+    model = DQN('MlpPolicy', env,
+        policy_kwargs=dict(net_arch=[256, 256]),
+        learning_rate=5e-4,
+        buffer_size=100_000,        # Buffer più grande per multi-env
+        learning_starts=1_000,      # ~250 step/env, raccoglie dati diversi
+        batch_size=128,             # Batch più grande → gradiente stabile
+        gamma=0.9,                  # Orizzonte ~10 step (5s a 2 Hz)
+        train_freq=4,               # 4 step/env → 16 transizioni per update
+        gradient_steps=2,           # 2 gradient step per update (sample-efficient)
+        target_update_interval=250, # Target network stabile
+        exploration_fraction=0.25,  # Epsilon min a ~50k step (era 100k!)
+        exploration_final_eps=0.05, # 5% exploration residua
+        verbose=1,
+        tensorboard_log=str(SAVE_DIR),
+        device=device,
     )
 
-    # Salva risultati
+    # =================================================================
+    #  TRAINING
+    # =================================================================
+
+    if TRAIN:
+        SAVE_DIR.mkdir(parents=True, exist_ok=True)
+
+        callbacks = [
+            TqdmCallback(),
+            # Checkpoint periodico ogni 25k step (safety net)
+            CheckpointCallback(
+                save_freq=25_000,
+                save_path=str(SAVE_DIR),
+                name_prefix="dqn_checkpoint",
+                save_replay_buffer=False,
+                save_vecnormalize=False,
+            ),
+            # Salva il miglior modello (protezione contro collapse)
+            BestModelCallback(
+                save_path=str(SAVE_DIR),
+                check_freq=500,
+                window=30,
+                verbose=1,
+            ),
+        ]
+
+        model.learn(TOTAL_TIMESTEPS, callback=callbacks)
+        model.save(str(SAVE_DIR / f"{MODEL_NAME}.zip"))
+        print(f"\n✓ Modello finale salvato: {SAVE_DIR}/{MODEL_NAME}.zip")
+        print(f"  (usa {SAVE_DIR}/best_model.zip per il miglior modello)")
+
+    env.close()
+
+    # =================================================================
+    #  VALUTAZIONE SU SCENARI MULTIPLI (Easy → Expert) con rendering
+    # =================================================================
+
+    best_path = SAVE_DIR / f"{MODEL_NAME}.zip"
+    final_path = SAVE_DIR / f"{MODEL_NAME}.zip"
+    load_path = best_path if best_path.exists() else final_path
+
+    print(f"\n{'='*60}")
+    print(f"  VALUTAZIONE: {load_path}")
+    print(f"{'='*60}\n")
+
+    model = DQN.load(str(load_path), device=device)
+
+    # Importa scenari standard da metrics_tracker (stessi usati per il confronto)
+    from metrics_tracker import EVAL_SCENARIOS
+
+    N_EVAL_EPISODES = 5  # episodi per scenario (con render)
+    all_results = {}
+
+    for sc in EVAL_SCENARIOS:
+        sc_name = sc['name']
+        sc_config = sc['config']
+
+        print(f"\n{'='*60}")
+        print(f"  {sc_name}: {sc['description']}")
+        print(f"  lanes={sc_config['lanes_count']}, vehicles={sc_config['vehicles_count']}, "
+              f"density={sc_config['vehicles_density']}, duration={sc_config['duration']}")
+        print(f"{'='*60}")
+
+        eval_env = gymnasium.make("highway-fast-v0", config=sc_config, render_mode='human')
+
+        returns, lengths, crashes = [], [], []
+        for ep in range(N_EVAL_EPISODES):
+            obs, _ = eval_env.reset(seed=42 + ep)
+            done, ep_return, ep_len, crashed = False, 0, 0, False
+            while not done:
+                eval_env.render()
+                time.sleep(RENDER_DELAY_MS / 1000.0)
+                action, _ = model.predict(obs, deterministic=True)
+                obs, reward, terminated, truncated, info = eval_env.step(action)
+                done = terminated or truncated
+                crashed = info.get('crashed', False)
+                ep_return += reward
+                ep_len += 1
+            returns.append(ep_return)
+            lengths.append(ep_len)
+            crashes.append(crashed)
+            status = "CRASH" if crashed else "OK"
+            print(f"  Ep {ep+1}/{N_EVAL_EPISODES}: [{status}] return={ep_return:.2f}, len={ep_len}")
+
+        survival = (1 - np.mean(crashes)) * 100
+        print(f"\n  --- {sc_name} ---")
+        print(f"  Reward:   {np.mean(returns):.2f} ± {np.std(returns):.2f}")
+        print(f"  Durata:   {np.mean(lengths):.0f} steps")
+        print(f"  Survival: {survival:.0f}%")
+
+        all_results[sc_name] = {
+            'avg_reward': float(np.mean(returns)),
+            'std_reward': float(np.std(returns)),
+            'avg_length': float(np.mean(lengths)),
+            'survival_rate': float(survival),
+            'crashes': int(sum(crashes)),
+            'episodes': N_EVAL_EPISODES,
+        }
+        eval_env.close()
+
+    # Tabella riepilogativa
+    print(f"\n{'='*60}")
+    print(f"{'RIEPILOGO VALUTAZIONE':^60}")
+    print(f"{'='*60}")
+    print(f"  {'Scenario':<12} {'Reward':>10} {'Survival':>10} {'Durata':>10}")
+    print(f"  {'-'*12} {'-'*10} {'-'*10} {'-'*10}")
+    for name, r in all_results.items():
+        print(f"  {name:<12} {r['avg_reward']:>10.2f} {r['survival_rate']:>9.0f}% {r['avg_length']:>10.0f}")
+    print(f"{'='*60}")
+
+    # Salva risultati JSON
     repo_root = Path(__file__).resolve().parents[1]
     logs_dir = repo_root / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = logs_dir / f"dqn_baseline_{timestamp}.json"
+    out_path = logs_dir / f"dqn_baseline_eval_{timestamp}.json"
 
     with open(out_path, "w") as f:
         json.dump({
-            "model": "DQN_baseline_v2",
+            "model": "DQN_baseline",
             "model_path": str(load_path),
             "timestamp": timestamp,
-            "n_episodes": 10,
-            "env_config": ENV_CONFIG,
-            "dqn_params": {
-                "gamma": 0.9,
-                "train_freq": 4,
-                "target_update_interval": 250,
-                "exploration_fraction": 0.5,
-                "exploration_final_eps": 0.05,
-                "buffer_size": 50_000,
-                "net_arch": [256, 256],
-            },
-            "results": results,
+            "n_episodes_per_scenario": N_EVAL_EPISODES,
+            "scenarios": all_results,
         }, f, indent=2)
     print(f"\nRisultati salvati: {out_path}")
 
-except Exception as e:
-    print(f"\n[WARN] Valutazione con metrics_tracker fallita: {e}")
-    print("Valutazione semplice...")
 
-    returns, lengths = [], []
-    for ep in range(10):
-        obs, _ = eval_env.reset()
-        done, ep_return, ep_len = False, 0, 0
-        while not done:
-            action, _ = model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = eval_env.step(action)
-            done = terminated or truncated
-            ep_return += reward
-            ep_len += 1
-        returns.append(ep_return)
-        lengths.append(ep_len)
-        print(f"  Ep {ep+1}: return={ep_return:.2f}, len={ep_len}")
-
-    print(f"\n  Media: return={np.mean(returns):.2f} ± {np.std(returns):.2f}, "
-          f"len={np.mean(lengths):.0f}/120")
-
-eval_env.close()
-env.close()
+if __name__ == '__main__':
+    main()

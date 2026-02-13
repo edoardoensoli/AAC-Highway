@@ -8,3 +8,4 @@ dcd_models
 dqn_*
 ppo_*
 *.log
+highway_dqn_accel/*

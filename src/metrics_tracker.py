@@ -419,7 +419,7 @@ class HighwayMetrics:
 def evaluate(
     model,
     env,
-    n_episodes: int = 100,
+    n_episodes: int = 10,
     metrics: Optional[Set[str]] = None,
     render: bool = False,
     verbose: bool = False,
@@ -466,3 +466,385 @@ def evaluate(
     
     tracker.print_report()
     return tracker.compute()
+
+
+# =============================================================================
+#  CLI: CONFRONTO MODELLI
+# =============================================================================
+
+# Scenari di test standard per confronto equo tra modelli.
+# Usano gli stessi reward/observation di ACCEL FIXED_PARAMS.
+EVAL_FIXED_PARAMS = {
+    'policy_frequency': 2,
+    'collision_reward': -10.0,
+    'high_speed_reward': 0.3,
+    'right_lane_reward': 0.0,
+    'lane_change_reward': 0.0,
+    'reward_speed_range': [20, 30],
+    'normalize_reward': False,
+    'observation': {
+        'type': 'Kinematics',
+        'vehicles_count': 7,
+        'features': ['presence', 'x', 'y', 'vx', 'vy'],
+        'features_range': {
+            'x': [-100, 100], 'y': [-100, 100],
+            'vx': [-20, 20], 'vy': [-20, 20],
+        },
+        'absolute': False,
+        'normalize': True,
+        'see_behind': True,
+        'order': 'sorted',
+    },
+}
+
+EVAL_SCENARIOS = [
+    {
+        'name': 'Easy',
+        'description': 'Stage 0 – 2 corsie, poco traffico',
+        'config': {
+            **EVAL_FIXED_PARAMS,
+            'lanes_count': 2, 'vehicles_count': 8,
+            'vehicles_density': 0.8, 'duration': 30,
+            'initial_spacing': 2.0,
+            'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
+        },
+    },
+    {
+        'name': 'Baseline',
+        'description': 'Stage 2 – 3 corsie, traffico moderato',
+        'config': {
+            **EVAL_FIXED_PARAMS,
+            'lanes_count': 3, 'vehicles_count': 12,
+            'vehicles_density': 0.8, 'duration': 40,
+            'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
+        },
+    },
+    {
+        'name': 'Medium',
+        'description': 'Stage 2 – 3 corsie, traffico moderato',
+        'config': {
+            **EVAL_FIXED_PARAMS,
+            'lanes_count': 3, 'vehicles_count': 15,
+            'vehicles_density': 1, 'duration': 40,
+            'initial_spacing': 2.0,
+            'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
+        },
+    },
+    {
+        'name': 'Hard',
+        'description': 'Stage 4 – 3 corsie, traffico denso, durata lunga',
+        'config': {
+            **EVAL_FIXED_PARAMS,
+            'lanes_count': 3, 'vehicles_count': 20,
+            'vehicles_density': 1.2, 'duration': 50,
+            'initial_spacing': 1.5,
+            'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
+        },
+    },
+    {
+        'name': 'Expert',
+        'description': 'Stage 6 – 4 corsie, denso, aggressivo',
+        'config': {
+            **EVAL_FIXED_PARAMS,
+            'lanes_count': 4, 'vehicles_count': 30,
+            'vehicles_density': 1.5, 'duration': 60,
+            'initial_spacing': 1.5,
+            'other_vehicles_type': 'highway_env.vehicle.behavior.AggressiveVehicle',
+        },
+    },
+]
+
+
+def compare_models(
+    models: Dict[str, str],
+    scenarios: Optional[List[Dict]] = None,
+    n_episodes: int = 10,
+    seed: int = 42,
+    device: str = 'auto',
+    output_dir: Optional[str] = None,
+) -> Dict[str, Dict]:
+    """
+    Confronta uno o più modelli su scenari standard e salva i risultati.
+
+    Args:
+        models: {nome_modello: path_al_file.zip}
+        scenarios: Lista di scenari (default: EVAL_SCENARIOS)
+        n_episodes: Episodi per scenario
+        seed: Seed per riproducibilità
+        device: 'auto', 'cpu' o 'cuda'
+        output_dir: Cartella di output (default: eval_results/<timestamp>)
+
+    Returns:
+        Dizionario annidato: {modello: {scenario: metriche}}
+    """
+    import gymnasium
+    import highway_env  # Registra highway-fast-v0, highway-v0, ecc.
+    import time
+
+    try:
+        from stable_baselines3 import DQN
+    except ImportError:
+        raise ImportError("stable_baselines3 non installato. Installa con: pip install stable-baselines3")
+
+    try:
+        import torch
+        if device == 'auto':
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    except ImportError:
+        device = 'cpu'
+
+    if scenarios is None:
+        scenarios = EVAL_SCENARIOS
+
+    # Crea cartella di output con timestamp
+    if output_dir is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = f"eval_results/compare_{timestamp}"
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    all_results: Dict[str, Dict] = {}
+
+    # Metriche da tracciare (le richieste dall'utente + extra utili)
+    target_metrics = {
+        'collision_rate', 'survival_rate',
+        'cars_overtaken', 'avg_episode_length',
+        'distance_traveled', 'avg_reward',
+        'avg_speed', 'lane_changes',
+    }
+
+    for model_name, model_path in models.items():
+        print(f"\n{'#'*65}")
+        print(f"  MODELLO: {model_name}")
+        print(f"  Path:    {model_path}")
+        print(f"{'#'*65}")
+
+        model = DQN.load(model_path, device=device)
+        model_results: Dict[str, Dict] = {}
+
+        for sc in scenarios:
+            sc_name = sc['name']
+            sc_config = sc['config']
+
+            print(f"\n  {'='*55}")
+            print(f"  Scenario: {sc_name} — {sc.get('description', '')}")
+            print(f"  Config: lanes={sc_config.get('lanes_count')}, "
+                  f"vehicles={sc_config.get('vehicles_count')}, "
+                  f"density={sc_config.get('vehicles_density', 1.0)}, "
+                  f"duration={sc_config.get('duration')}")
+            print(f"  {'='*55}")
+
+            env = gymnasium.make("highway-fast-v0", config=sc_config)
+
+            t0 = time.time()
+            metrics = evaluate(
+                model=model, env=env, n_episodes=n_episodes,
+                metrics=target_metrics, render=False, verbose=False, seed=seed,
+            )
+            eval_time = time.time() - t0
+
+            env.close()
+
+            # Aggiungi info extra
+            metrics['eval_time_seconds'] = round(eval_time, 2)
+            model_results[sc_name] = metrics
+
+        all_results[model_name] = model_results
+
+        # --- Salva JSON per questo modello ---
+        model_json = {
+            'model_name': model_name,
+            'model_path': str(model_path),
+            'timestamp': datetime.now().isoformat(),
+            'n_episodes_per_scenario': n_episodes,
+            'seed': seed,
+            'device': device,
+            'scenarios': {},
+        }
+        for sc in scenarios:
+            sc_name = sc['name']
+            sc_config = sc['config']
+            sc_metrics = model_results.get(sc_name, {})
+
+            # Filtra config per leggibilità (solo parametri env, no observation blob)
+            env_summary = {
+                'lanes_count': sc_config.get('lanes_count'),
+                'vehicles_count': sc_config.get('vehicles_count'),
+                'vehicles_density': sc_config.get('vehicles_density'),
+                'duration': sc_config.get('duration'),
+                'initial_spacing': sc_config.get('initial_spacing'),
+                'collision_reward': sc_config.get('collision_reward'),
+                'high_speed_reward': sc_config.get('high_speed_reward'),
+                'other_vehicles_type': sc_config.get('other_vehicles_type', '').split('.')[-1],
+            }
+
+            model_json['scenarios'][sc_name] = {
+                'description': sc.get('description', ''),
+                'environment': env_summary,
+                'results': {
+                    'collision_rate': round(sc_metrics.get('collision_rate', 0), 2),
+                    'survival_rate': round(sc_metrics.get('survival_rate', 0), 2),
+                    'cars_overtaken': round(sc_metrics.get('cars_overtaken', 0), 2),
+                    'avg_episode_length': round(sc_metrics.get('avg_episode_length', 0), 1),
+                    'distance_traveled': round(sc_metrics.get('distance_traveled', 0), 1),
+                    'avg_reward': round(sc_metrics.get('avg_reward', 0), 2),
+                    'avg_speed': round(sc_metrics.get('avg_speed', 0), 2),
+                    'lane_changes': round(sc_metrics.get('lane_changes', 0), 2),
+                    'eval_time_seconds': sc_metrics.get('eval_time_seconds', 0),
+                },
+            }
+
+        json_path = out_path / f"{model_name}.json"
+        with open(json_path, 'w') as f:
+            json.dump(model_json, f, indent=2)
+        print(f"\n  [SALVATO] {json_path}")
+
+    # --- Tabella comparativa in console ---
+    _print_comparison_table(all_results, scenarios)
+
+    # --- Salva riepilogo confronto ---
+    summary = {
+        'timestamp': datetime.now().isoformat(),
+        'models': list(models.keys()),
+        'n_episodes_per_scenario': n_episodes,
+        'results': {},
+    }
+    for sc in scenarios:
+        sc_name = sc['name']
+        summary['results'][sc_name] = {}
+        for m_name in models:
+            m_res = all_results.get(m_name, {}).get(sc_name, {})
+            summary['results'][sc_name][m_name] = {
+                'survival_rate': round(m_res.get('survival_rate', 0), 1),
+                'avg_reward': round(m_res.get('avg_reward', 0), 2),
+                'cars_overtaken': round(m_res.get('cars_overtaken', 0), 2),
+                'distance_traveled': round(m_res.get('distance_traveled', 0), 1),
+            }
+    with open(out_path / "comparison_summary.json", 'w') as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"\nRisultati salvati in: {out_path}")
+    return all_results
+
+
+def _print_comparison_table(
+    all_results: Dict[str, Dict],
+    scenarios: List[Dict],
+):
+    """Stampa una tabella comparativa leggibile per tutti i modelli."""
+    model_names = list(all_results.keys())
+    if not model_names:
+        return
+
+    # Larghezza colonne
+    name_w = max(12, max(len(n) for n in model_names) + 2)
+    col_w = name_w
+
+    print(f"\n{'='*75}")
+    print(f"{'CONFRONTO MODELLI':^75}")
+    print(f"{'='*75}")
+
+    for sc in scenarios:
+        sc_name = sc['name']
+        print(f"\n  --- {sc_name}: {sc.get('description', '')} ---")
+
+        # Header
+        header = f"  {'Metrica':<22}"
+        for m in model_names:
+            header += f" {m:>{col_w}}"
+        print(header)
+        print(f"  {'-'*22}" + f" {'-'*col_w}" * len(model_names))
+
+        rows = [
+            ('Survival %',       'survival_rate',       '{:.1f}%'),
+            ('Collision %',      'collision_rate',      '{:.1f}%'),
+            ('Reward medio',     'avg_reward',          '{:.2f}'),
+            ('Auto superate',    'cars_overtaken',      '{:.1f}'),
+            ('Distanza (m)',     'distance_traveled',   '{:.0f}'),
+            ('Durata (steps)',   'avg_episode_length',  '{:.0f}'),
+            ('Velocita (m/s)',   'avg_speed',           '{:.1f}'),
+            ('Cambi corsia',    'lane_changes',        '{:.1f}'),
+        ]
+
+        for label, key, fmt in rows:
+            line = f"  {label:<22}"
+            for m in model_names:
+                val = all_results.get(m, {}).get(sc_name, {}).get(key, 0)
+                line += f" {fmt.format(val):>{col_w}}"
+            print(line)
+
+    print(f"\n{'='*75}\n")
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        description="Confronta modelli RL su scenari highway-env standard",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Esempi:
+  # Confronta due modelli
+  python metrics_tracker.py --dqn_baseline ./highway_dqn/best_model.zip \\
+                            --dqn_accel ./highway_dqn_accel/dqn_accel_final.zip
+
+  # Un solo modello, 20 episodi
+  python metrics_tracker.py --mio_modello ./path/model.zip --episodes 20
+
+  # Tre modelli con output custom
+  python metrics_tracker.py --baseline model_a.zip --accel model_b.zip \\
+                            --curriculum model_c.zip --output ./my_eval
+        """
+    )
+
+    parser.add_argument('--episodes', type=int, default=10,
+                        help='Episodi per scenario (default: 10)')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Seed per riproducibilità (default: 42)')
+    parser.add_argument('--device', type=str, default='auto',
+                        choices=['auto', 'cpu', 'cuda'],
+                        help='Device (default: auto)')
+    parser.add_argument('--output', type=str, default=None,
+                        help='Cartella di output (default: eval_results/compare_<timestamp>)')
+
+    # Parsing in due fasi: prima i noti, poi i modelli dinamici
+    args, remaining = parser.parse_known_args()
+
+    # Parse argomenti modello: --nome_modello /path/to/model.zip
+    models: Dict[str, str] = {}
+    i = 0
+    while i < len(remaining):
+        token = remaining[i]
+        if token.startswith('--') and i + 1 < len(remaining):
+            name = token.lstrip('-').replace('-', '_')
+            path = remaining[i + 1]
+            if not Path(path).exists():
+                print(f"[ERRORE] File non trovato: {path}")
+                sys.exit(1)
+            models[name] = path
+            i += 2
+        else:
+            print(f"[ERRORE] Argomento non riconosciuto: {token}")
+            print("Usa: --nome_modello /path/al/modello.zip")
+            sys.exit(1)
+
+    if not models:
+        print("[ERRORE] Specifica almeno un modello.")
+        print("Uso: python metrics_tracker.py --nome_modello /path/model.zip")
+        print("     python metrics_tracker.py --baseline a.zip --accel b.zip")
+        sys.exit(1)
+
+    print(f"\nModelli da confrontare: {len(models)}")
+    for name, path in models.items():
+        print(f"  - {name}: {path}")
+    print(f"Episodi per scenario: {args.episodes}")
+    print(f"Seed: {args.seed}")
+
+    compare_models(
+        models=models,
+        n_episodes=args.episodes,
+        seed=args.seed,
+        device=args.device,
+        output_dir=args.output,
+    )
