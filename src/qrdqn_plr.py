@@ -79,7 +79,11 @@ def _make_wrapped_env(seed: int, rank: int = 0):
     env_config = config_without_env_id(cfg)
 
     def _init():
-        env = gym.make("highway-v0", config=env_config)
+        # For QR-DQN experiments we use a reduced collision penalty
+        # to encourage learning rather than overly conservative policies.
+        env_config_local = dict(env_config)
+        env_config_local["collision_reward"] = -5
+        env = gym.make("highway-v0", config=env_config_local)
         return HighwayLevelWrapper(env, seed=seed)
 
     return _init
@@ -163,12 +167,12 @@ def score_level_qrdqn(
 # ──────────────────────────────────────────────────────────────────────────────
 def train_qrdqn_plr_robust(
     total_timesteps: int = 5_000_000,
-    steps_per_level: int = 10_000,
+    steps_per_level: int = 2_000,
     eval_episodes: int = 5,
     # PLR⊥ parameters
     plr_strategy: str = "max_mc",
     plr_rho: float = 0.6,
-    plr_nu: float = 0.7,              # replay rate ≈ 0.3
+    plr_nu: float = 0.3,              # lower replay rate (less aggressive)
     plr_score_transform: str = "rank",
     plr_temperature: float = 0.1,
     plr_staleness_coef: float = 0.1,
@@ -497,12 +501,12 @@ def main():
     SKIP_EVALUATION = False
 
     TOTAL_TIMESTEPS  = 5_000_000
-    STEPS_PER_LEVEL  = 10_000
+    STEPS_PER_LEVEL  = 2_000
     EVAL_EPISODES    = 5
 
     PLR_STRATEGY         = "max_mc"
     PLR_RHO              = 0.6
-    PLR_NU               = 0.7      # replay rate ≈ 0.3
+    PLR_NU               = 0.3      # lower replay rate for QR-DQN
     PLR_SCORE_TRANSFORM  = "rank"
     PLR_TEMPERATURE      = 0.1
     PLR_STALENESS_COEF   = 0.1
