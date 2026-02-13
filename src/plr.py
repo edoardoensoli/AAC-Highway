@@ -109,6 +109,7 @@ class LevelSampler:
         self.scores = np.zeros(num_levels, dtype=np.float64)
         self.staleness = np.zeros(num_levels, dtype=np.float64)
         self.unseen_weights = np.ones(num_levels, dtype=np.float64)  # 1 = unseen
+        self.max_returns = np.full(num_levels, -np.inf, dtype=np.float64)
 
     # ── public API ───────────────────────────────────────────────────────────
 
@@ -152,6 +153,32 @@ class LevelSampler:
         self.unseen_weights[level_idx] = 0.0  # mark as seen
         old = self.scores[level_idx]
         self.scores[level_idx] = self.alpha * score + (1 - self.alpha) * old
+
+    def update_with_maxmc(
+        self,
+        level_idx: int,
+        max_episode_return: float,
+        mean_reward: float,
+    ):
+        """
+        Update score using MaxMC regret.
+
+        MaxMC tracks the **maximum** episodic return ever achieved on each
+        level as a "ground truth" upper bound.  The score (regret) is then:
+
+        .. math::
+            \\text{score} = \\max(\\text{max\_return}[i] - \\bar{R}, \\; 0)
+
+        This avoids the bias of ``estimated_regret`` which relies on the
+        (potentially inaccurate) learned value function.  MaxMC aligns
+        more closely with the true minimax-regret objective used in the
+        theoretical proofs for PLR⊥.
+        """
+        self.max_returns[level_idx] = max(
+            self.max_returns[level_idx], max_episode_return
+        )
+        regret = max(self.max_returns[level_idx] - mean_reward, 0.0)
+        self.update_score(level_idx, regret)
 
     def update_staleness(self, selected_idx: int):
         """Increment staleness for all levels, reset for the active one."""
@@ -268,6 +295,7 @@ class LevelSampler:
                     "scores": self.scores,
                     "staleness": self.staleness,
                     "unseen_weights": self.unseen_weights,
+                    "max_returns": self.max_returns,
                     "strategy": self.strategy,
                     "rho": self.rho,
                     "nu": self.nu,
@@ -281,6 +309,10 @@ class LevelSampler:
         self.scores = d["scores"]
         self.staleness = d["staleness"]
         self.unseen_weights = d["unseen_weights"]
+        self.max_returns = d.get(
+            "max_returns",
+            np.full(self.num_levels, -np.inf, dtype=np.float64),
+        )
 
     def __repr__(self) -> str:
         return (
@@ -403,6 +435,23 @@ class LevelScorer:
         probs = torch.softmax(logits, dim=-1)
         return float((1.0 - probs.max(dim=-1)[0]).mean())
 
+    @staticmethod
+    def max_mc(
+        episode_rewards: List[float],
+    ) -> float:
+        """
+        Maximum Monte-Carlo return from the rollout’s episodes.
+
+        Used with :meth:`LevelSampler.update_with_maxmc` to implement
+        MaxMC scoring.  The sampler tracks the historical maximum and
+        computes regret = max_ever − current_mean, which provides a
+        "ground truth" learning-potential signal free from value-function
+        bias.
+        """
+        if not episode_rewards:
+            return 0.0
+        return float(max(episode_rewards))
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. Level Rollout Buffer  (stores per-level data for scoring)
@@ -461,6 +510,13 @@ class LevelRollout:
             return 0.0
         return float(np.mean(self.episode_lengths))
 
+    @property
+    def max_episode_return(self) -> float:
+        """Maximum episodic return observed in this rollout."""
+        if not self.episode_rewards:
+            return 0.0
+        return float(max(self.episode_rewards))
+
     def compute_returns(self, gamma: float = 0.99) -> np.ndarray:
         """Compute discounted returns per step, respecting episode boundaries."""
         returns = np.zeros(len(self.rewards), dtype=np.float64)
@@ -509,6 +565,8 @@ class LevelRollout:
                 return 0.0
             logits = np.array(self.action_logits)
             return LevelScorer.least_confidence(logits)
+        elif strategy == "max_mc":
+            return LevelScorer.max_mc(self.episode_rewards)
         else:
             raise ValueError(f"Unknown scoring strategy: {strategy}")
 

@@ -1,27 +1,36 @@
 """
-PPO + PLR⊥ (Robust Prioritized Level Replay) — Highway-env
-============================================================
+QR-DQN + PLR⊥ (Robust Prioritized Level Replay) — Highway-env
+================================================================
 
-PLR⊥ (Jiang et al., 2021 §4.2) restricts gradient updates to **replayed**
-levels.  When the sampler decides to *explore* (discover new levels), the
-agent only collects a scoring rollout — no weight updates.  This eliminates
-noise from random discovery levels and keeps gradient signal focused on the
-learning frontier.
+Off-policy curriculum learning using Quantile-Regression DQN from
+``sb3-contrib``.  QR-DQN is recommended over standard DQN for PLR because:
 
-Scoring: ``estimated_regret`` (default) or ``one_step_td_error``.
-Level space: seed-based parametric mapping to (lanes_count, vehicles_count,
-             vehicles_density, POLITENESS).
+1. **Distributional value estimates** — the quantile representation captures
+   return uncertainty, which makes the agent more robust to the diverse
+   MDPs produced by the curriculum.
 
-Architecture
-------------
-• plr.py                — PLR⊥ sampling + scoring (algorithm-agnostic)
-• plr_configs.py        — seed→factor mapping, HighwayLevelWrapper,
-                           HighwayLevelFactory, disjoint Λ_train / Λ_test
-• ppo_plr.py (THIS FILE) — PPO training loop + PLR⊥ integration +
-                            held-out Λ_test zero-shot evaluation
+2. **Better sample efficiency** — off-policy replay can reuse transitions
+   from earlier levels, reducing the data-wastage inherent in PLR⊥ where
+   exploration rollouts are discarded without gradient updates.
 
-Optimised for MacBook Air M1 (MPS backend, 2–4 parallel envs).
+3. **Discrete action support** — unlike SAC (continuous), QR-DQN works
+   natively with highway-env's ``DiscreteMetaAction`` space.
+
+Architecture: OccupancyGridCNN feature extractor (spatial CNN for the
+              2-D occupancy grid observation).
+
+Scoring:      MaxMC (default) — ground-truth regret proxy.
+
+Dependencies: ``pip install sb3-contrib==1.8.0``
+
+Reference
+---------
+Dabney et al., "Distributional Reinforcement Learning with Quantile
+Regression", AAAI 2018.
+Jiang et al., "Prioritized Level Replay", arXiv:2010.03934.
 """
+
+from __future__ import annotations
 
 import gymnasium as gym
 import highway_env
@@ -29,16 +38,14 @@ import torch
 import numpy as np
 import json
 import time
-import pickle
 
 from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-from stable_baselines3 import PPO
+from sb3_contrib import QRDQN
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
-from stable_baselines3.common.callbacks import BaseCallback
 
 from plr import LevelSampler, LevelScorer, LevelRollout, RollingStats
 from plr_configs import (
@@ -46,11 +53,7 @@ from plr_configs import (
     HighwayLevelWrapper,
     seed_to_config,
     seed_to_factors,
-    describe_config,
     config_without_env_id,
-    get_env_id,
-    generate_env_configs,
-    generate_test_configs,
     TRAIN_SEEDS,
     TEST_SEEDS,
 )
@@ -65,21 +68,9 @@ def get_device() -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Environment helpers  (wraps into HighwayLevelWrapper for POLITENESS)
+# Environment helpers
 # ──────────────────────────────────────────────────────────────────────────────
 NUM_ENVS = 4
-
-
-class TqdmUpdateCallback(BaseCallback):
-    """Updates the shared tqdm bar on every training step for real-time feedback."""
-
-    def __init__(self, pbar: tqdm):
-        super().__init__()
-        self._pbar = pbar
-
-    def _on_step(self) -> bool:
-        self._pbar.update(self.training_env.num_envs)
-        return True
 
 
 def _make_wrapped_env(seed: int, rank: int = 0):
@@ -95,36 +86,33 @@ def _make_wrapped_env(seed: int, rank: int = 0):
 
 
 def make_vec_env(seed: int, n_envs: int = NUM_ENVS):
-    """Create a SubprocVecEnv of wrapped environments from a single seed."""
     if n_envs == 1:
         return DummyVecEnv([_make_wrapped_env(seed, 0)])
     return SubprocVecEnv([_make_wrapped_env(seed, i) for i in range(n_envs)])
 
 
 def make_single_env(seed: int, render: bool = False):
-    """Create a single wrapped env for evaluation."""
     factory = HighwayLevelFactory()
     return factory.make_env(seed, render=render)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PLR scoring rollout  (no gradient updates — data only)
+# PLR Scoring Rollout
 # ──────────────────────────────────────────────────────────────────────────────
 @torch.no_grad()
-def score_level(
-    model: PPO,
+def score_level_qrdqn(
+    model: QRDQN,
     seed: int,
     level_idx: int,
     n_episodes: int = 5,
     gamma: float = 0.99,
-    strategy: str = "estimated_regret",
+    strategy: str = "max_mc",
 ) -> LevelRollout:
     """
-    Collect a rollout on level ``seed`` for PLR scoring.
+    Collect a scoring rollout on level ``seed`` using QR-DQN.
 
-    No weight updates — purely forward passes.  Returns a
-    :class:`LevelRollout` whose ``compute_score()`` method produces
-    the PLR priority.
+    For MaxMC scoring, only episode returns are needed.  For value-based
+    strategies the mean quantile Q-value is used as the value estimate.
     """
     device = model.device
     rollout = LevelRollout(level_idx=level_idx)
@@ -135,14 +123,21 @@ def score_level(
         done = truncated = False
 
         while not (done or truncated):
+            # Get Q-value estimate from quantile network
             obs_t = torch.as_tensor(
                 obs[np.newaxis].astype(np.float32), device=device
             )
-            value = model.policy.predict_values(obs_t)
-            val = float(value.cpu().squeeze())
-
-            dist = model.policy.get_distribution(obs_t)
-            logits = dist.distribution.logits.cpu().numpy().squeeze()
+            try:
+                # QR-DQN: quantile_net returns mean Q-values
+                q_values = model.policy.quantile_net(obs_t)
+                if q_values.dim() == 3:
+                    # (1, n_actions, n_quantiles) → mean across quantiles
+                    q_values = q_values.mean(dim=-1)
+                max_q = float(q_values.max(dim=1)[0].cpu())
+                q_logits = q_values.cpu().numpy().squeeze()
+            except Exception:
+                max_q = 0.0
+                q_logits = np.zeros(env.action_space.n, dtype=np.float32)
 
             action, _ = model.predict(obs, deterministic=False)
             next_obs, reward, done, truncated, _ = env.step(action)
@@ -151,8 +146,8 @@ def score_level(
                 obs=obs.copy(),
                 action=int(action),
                 reward=float(reward),
-                value=val,
-                logits=logits,
+                value=max_q,
+                logits=q_logits,
             )
             obs = next_obs
 
@@ -164,44 +159,44 @@ def score_level(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PPO + PLR⊥ Training Loop
+# QR-DQN + PLR⊥ Training Loop
 # ──────────────────────────────────────────────────────────────────────────────
-def train_ppo_plr_robust(
+def train_qrdqn_plr_robust(
     total_timesteps: int = 5_000_000,
-    steps_per_level: int = 4_096,
-    eval_episodes: int = 10,
+    steps_per_level: int = 10_000,
+    eval_episodes: int = 5,
     # PLR⊥ parameters
-    plr_strategy: str = "estimated_regret",
+    plr_strategy: str = "max_mc",
     plr_rho: float = 0.6,
-    plr_nu: float = 0.5,
+    plr_nu: float = 0.7,              # replay rate ≈ 0.3
     plr_score_transform: str = "rank",
     plr_temperature: float = 0.1,
     plr_staleness_coef: float = 0.1,
     plr_alpha: float = 1.0,
-    robust: bool = True,           # PLR⊥: skip gradient on explore levels
-    # PPO hyperparameters
-    learning_rate: float = 2e-4,
-    n_steps: int = 1024,
-    batch_size: int = 256,
-    n_epochs: int = 10,
+    robust: bool = True,
+    # QR-DQN hyperparameters
+    learning_rate: float = 1e-4,
+    buffer_size: int = 100_000,
+    learning_starts: int = 5_000,
+    batch_size: int = 128,
     gamma: float = 0.99,
-    gae_lambda: float = 0.95,
-    clip_range: float = 0.2,
-    ent_coef: float = 0.01,
-    vf_coef: float = 0.5,
-    max_grad_norm: float = 0.5,
+    train_freq: int = 4,
+    gradient_steps: int = 1,
+    target_update_interval: int = 1_000,
+    exploration_fraction: float = 0.3,
+    exploration_final_eps: float = 0.05,
+    n_quantiles: int = 50,
     # General
-    save_dir: str = "highway_ppo_plr",
+    save_dir: str = "highway_qrdqn_plr",
     verbose: int = 1,
 ):
     """
-    Train PPO with PLR⊥ (Robust Prioritized Level Replay).
+    Train QR-DQN with PLR⊥ (Robust Prioritized Level Replay).
 
-    Core loop per iteration:
-    1. ``sampler.sample_with_decision()``  →  (level_idx, is_replay)
-    2. **If** ``is_replay`` → train PPO for ``steps_per_level`` steps.
-       **Else** → run scoring rollout only (no gradient).
-    3. Score the level and update the sampler.
+    Off-policy curriculum: the replay buffer retains transitions across
+    level switches, providing additional sample reuse beyond what PPO
+    can achieve.  Combined with MaxMC scoring, this produces a robust
+    agent that generalises to unseen highway configurations.
     """
     device = get_device()
     factory = HighwayLevelFactory()
@@ -210,24 +205,20 @@ def train_ppo_plr_robust(
 
     # ── banner ──
     print(f"\n{'=' * 72}")
-    print(f"  PPO + {mode_label}")
+    print(f"  QR-DQN + {mode_label}")
     print(f"{'=' * 72}")
     print(f"  Device .............. {device}")
     print(f"  Parallel envs ....... {NUM_ENVS}")
     print(f"  Total timesteps ..... {total_timesteps:,}")
     print(f"  Steps per level ..... {steps_per_level:,}")
-    print(f"  Eval episodes ....... {eval_episodes}")
     print(f"  PLR strategy ........ {plr_strategy}")
     print(f"  PLR rho ............. {plr_rho}")
     print(f"  PLR nu .............. {plr_nu}")
     print(f"  Robust (PLR⊥) ....... {robust}")
-    print(f"  Training levels ..... {n_train}  (seeds {TRAIN_SEEDS[0]}–{TRAIN_SEEDS[-1]})")
-    print(f"  Test levels ......... {factory.num_test_levels}  (seeds {TEST_SEEDS[0]}–{TEST_SEEDS[-1]})")
-    print(f"  Learning rate ....... {learning_rate}")
-    print(f"  PPO n_steps ......... {n_steps}")
-    print(f"  PPO batch_size ...... {batch_size}")
-    print(f"  Gamma ............... {gamma}")
-    print(f"  Entropy coef ........ {ent_coef}")
+    print(f"  QR-DQN quantiles .... {n_quantiles}")
+    print(f"  Buffer size ......... {buffer_size:,}")
+    print(f"  Training levels ..... {n_train}")
+    print(f"  Test levels ......... {factory.num_test_levels}")
     print(f"{'=' * 72}\n")
 
     # ── PLR sampler ──
@@ -247,24 +238,25 @@ def train_ppo_plr_robust(
     seed = factory.train_seeds[level_idx]
     vec_env = make_vec_env(seed, NUM_ENVS)
 
-    model = PPO(
+    model = QRDQN(
         "CnnPolicy",
         vec_env,
         policy_kwargs=dict(
             features_extractor_class=OccupancyGridCNN,
             features_extractor_kwargs=dict(features_dim=256),
-            net_arch=dict(pi=[256, 256], vf=[256, 256]),
+            net_arch=[256, 256],
+            n_quantiles=n_quantiles,
         ),
         learning_rate=learning_rate,
-        n_steps=n_steps,
+        buffer_size=buffer_size,
+        learning_starts=learning_starts,
         batch_size=batch_size,
-        n_epochs=n_epochs,
         gamma=gamma,
-        gae_lambda=gae_lambda,
-        clip_range=clip_range,
-        ent_coef=ent_coef,
-        vf_coef=vf_coef,
-        max_grad_norm=max_grad_norm,
+        train_freq=train_freq,
+        gradient_steps=gradient_steps,
+        target_update_interval=target_update_interval,
+        exploration_fraction=exploration_fraction,
+        exploration_final_eps=exploration_final_eps,
         verbose=0,
         tensorboard_log=None,
         device=device,
@@ -287,7 +279,7 @@ def train_ppo_plr_robust(
     last_checkpoint = 0
     CHECKPOINT_INTERVAL = 100_000
 
-    pbar = tqdm(total=total_timesteps, desc=f"PPO+{mode_label}",
+    pbar = tqdm(total=total_timesteps, desc=f"QRDQN+{mode_label}",
                 unit="step", dynamic_ncols=True)
     wall_start = time.perf_counter()
 
@@ -298,31 +290,30 @@ def train_ppo_plr_robust(
 
         # ── PLR⊥ decision ──
         if is_replay or not robust:
-            # REPLAY level → train with gradient updates
+            # REPLAY → train with gradient updates
             ts_before = model.num_timesteps
             model.learn(
                 total_timesteps=steps_this,
                 reset_num_timesteps=False,
                 progress_bar=False,
-                callback=TqdmUpdateCallback(pbar),
             )
             actual_steps = model.num_timesteps - ts_before
             timesteps_done += actual_steps
+            pbar.update(actual_steps)
             replay_count += 1
 
-            # ── checkpoint every 100k steps (overwrite) ──
+            # ── checkpoint ──
             if timesteps_done - last_checkpoint >= CHECKPOINT_INTERVAL:
                 model.save(save_path / "checkpoint")
                 last_checkpoint = timesteps_done
                 if verbose:
-                    tqdm.write(f"  💾 Checkpoint saved at {timesteps_done:,} steps")
+                    tqdm.write(f"  Checkpoint saved at {timesteps_done:,} steps")
         else:
-            # EXPLORE level → score only, NO gradient update
+            # EXPLORE → score only, NO gradient update
             explore_count += 1
-            # (timesteps are NOT added to budget since no training happened)
 
         # ── score the level ──
-        rollout = score_level(
+        rollout = score_level_qrdqn(
             model, seed, level_idx,
             n_episodes=eval_episodes,
             gamma=gamma,
@@ -357,7 +348,10 @@ def train_ppo_plr_robust(
                 f"{rollout.crash_count}/{eval_episodes} crashed"
                 if rollout.crash_count > 0 else "no crashes"
             )
-            mode_tag = "REPLAY → train" if (is_replay or not robust) else "EXPLORE → score only"
+            mode_tag = (
+                "REPLAY → train"
+                if (is_replay or not robust) else "EXPLORE → score only"
+            )
             tqdm.write(
                 f"\n  ┌─ Iter {iteration:>3d}  │  "
                 f"{timesteps_done:,}/{total_timesteps:,} steps  │  "
@@ -406,6 +400,10 @@ def train_ppo_plr_robust(
         vec_env = make_vec_env(seed, NUM_ENVS)
         model.set_env(vec_env)
 
+        # NOTE: We do NOT clear the replay buffer.  Off-policy methods
+        # tolerate distribution shift via the replay buffer — this is
+        # exactly the advantage over PPO for PLR curriculum learning.
+
     pbar.close()
     vec_env.close()
 
@@ -421,7 +419,7 @@ def train_ppo_plr_robust(
 
     meta = {
         "timestamp": datetime.now().isoformat(),
-        "algorithm": "PPO",
+        "algorithm": "QR-DQN",
         "plr_variant": "PLR⊥ (Robust)" if robust else "PLR (Standard)",
         "total_timesteps": total_timesteps,
         "steps_per_level": steps_per_level,
@@ -437,20 +435,14 @@ def train_ppo_plr_robust(
             "nu": plr_nu,
             "robust": robust,
             "score_transform": plr_score_transform,
-            "temperature": plr_temperature,
-            "staleness_coef": plr_staleness_coef,
-            "alpha": plr_alpha,
         },
-        "ppo": {
+        "qrdqn": {
             "learning_rate": learning_rate,
-            "n_steps": n_steps,
+            "buffer_size": buffer_size,
             "batch_size": batch_size,
-            "n_epochs": n_epochs,
             "gamma": gamma,
-            "gae_lambda": gae_lambda,
-            "clip_range": clip_range,
-            "ent_coef": ent_coef,
-            "vf_coef": vf_coef,
+            "n_quantiles": n_quantiles,
+            "target_update_interval": target_update_interval,
         },
         "num_train_levels": n_train,
         "num_test_levels": factory.num_test_levels,
@@ -476,7 +468,6 @@ def train_ppo_plr_robust(
     print(f"  Avg reward (last {stats.window})  {stats.avg_reward:.2f}")
     print(f"  Best reward ......... {stats.best_reward:.2f}")
     print(f"  Survival rate ....... {stats.survival_rate:.1f}%")
-    print(f"  Reward trend ........ {stats.reward_trend}")
     print(f"{'=' * 72}")
     print(f"  PLR CURRICULUM")
     print(f"  {'─' * 40}")
@@ -492,198 +483,9 @@ def train_ppo_plr_robust(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Held-out Λ_test evaluation  (zero-shot generalisation)
+# Held-out evaluation  (reuse from ppo_plr)
 # ──────────────────────────────────────────────────────────────────────────────
-def evaluate_on_test_configs(model, n_episodes: int = 10):
-    """
-    Evaluate on the **held-out** Λ_test seeds that were never seen during
-    PLR sampling.  Measures true zero-shot generalisation.
-    """
-    factory = HighwayLevelFactory()
-
-    print(f"\n{'=' * 72}")
-    print("  EVALUATING ON Λ_test  (held-out, zero-shot generalisation)")
-    print(f"{'=' * 72}")
-    print(f"  Episodes per level .. {n_episodes}")
-    print(f"  Test levels ......... {factory.num_test_levels}")
-    print(f"  Test seed range ..... {TEST_SEEDS[0]}–{TEST_SEEDS[-1]}")
-    print(f"{'=' * 72}\n")
-
-    results = []
-    all_rewards: List[float] = []
-    all_crashes = 0
-    all_lengths: List[int] = []
-    total_episodes = 0
-
-    for i in range(factory.num_test_levels):
-        seed = factory.test_seeds[i]
-        env = factory.make_test_env(i)
-        rewards: List[float] = []
-        ep_lengths: List[int] = []
-        crashes = 0
-
-        for _ in range(n_episodes):
-            obs, _ = env.reset()
-            done = truncated = False
-            ep_r = 0.0
-            steps = 0
-            while not (done or truncated):
-                action, _ = model.predict(obs, deterministic=True)
-                obs, r, done, truncated, _ = env.step(action)
-                ep_r += r
-                steps += 1
-            rewards.append(ep_r)
-            ep_lengths.append(steps)
-            if done and not truncated:
-                crashes += 1
-        env.close()
-
-        avg = float(np.mean(rewards))
-        std = float(np.std(rewards))
-        med = float(np.median(rewards))
-        best_r = float(np.max(rewards))
-        worst_r = float(np.min(rewards))
-        cr = 100.0 * crashes / n_episodes
-        surv = 100.0 - cr
-        avg_len = float(np.mean(ep_lengths))
-
-        results.append({
-            "seed": seed,
-            "config_desc": factory.describe_test_level(i),
-            "factors": seed_to_factors(seed),
-            "avg_reward": avg, "std_reward": std,
-            "median_reward": med, "best_reward": best_r,
-            "worst_reward": worst_r,
-            "crash_rate": cr, "survival_rate": surv,
-            "avg_ep_length": avg_len, "crashes": crashes,
-        })
-
-        all_rewards.extend(rewards)
-        all_crashes += crashes
-        all_lengths.extend(ep_lengths)
-        total_episodes += n_episodes
-
-        crash_str = (
-            f"{crashes}/{n_episodes} crashed"
-            if crashes > 0 else "no crashes"
-        )
-        print(
-            f"  ┌─ Test {i+1}/{factory.num_test_levels}  │  "
-            f"{factory.describe_test_level(i)}"
-        )
-        print(
-            f"  │  R={avg:>7.2f} ± {std:.2f}  "
-            f"Med={med:.2f}  Best={best_r:.2f}  Worst={worst_r:.2f}"
-        )
-        print(
-            f"  └─ Surv={surv:>5.1f}%  {crash_str}  "
-            f"Avg length={avg_len:.0f} steps\n"
-        )
-
-    overall_avg = float(np.mean(all_rewards))
-    overall_std = float(np.std(all_rewards))
-    overall_cr = 100.0 * all_crashes / max(total_episodes, 1)
-    overall_surv = 100.0 - overall_cr
-    overall_len = float(np.mean(all_lengths))
-
-    print(f"{'=' * 72}")
-    print("  Λ_test SUMMARY  (zero-shot generalisation)")
-    print(f"  {'─' * 40}")
-    print(f"  Total episodes ...... {total_episodes}")
-    print(f"  Avg reward .......... {overall_avg:.2f} ± {overall_std:.2f}")
-    print(f"  Survival rate ....... {overall_surv:.1f}%  "
-          f"({all_crashes}/{total_episodes} crashed)")
-    print(f"  Avg episode length .. {overall_len:.0f} steps")
-    print(f"{'=' * 72}\n")
-
-    return results
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Evaluate on Λ_train  (in-distribution check)
-# ──────────────────────────────────────────────────────────────────────────────
-def evaluate_on_train_configs(model, n_episodes: int = 5):
-    """Evaluate on training seeds for in-distribution reference."""
-    factory = HighwayLevelFactory()
-
-    print(f"\n{'=' * 72}")
-    print("  EVALUATING ON Λ_train  (in-distribution reference)")
-    print(f"{'=' * 72}\n")
-
-    results = []
-    for i in range(factory.num_train_levels):
-        seed = factory.train_seeds[i]
-        env = factory.make_train_env(i)
-        rewards, crashes = [], 0
-        for _ in range(n_episodes):
-            obs, _ = env.reset()
-            done = truncated = False
-            ep_r = 0.0
-            while not (done or truncated):
-                action, _ = model.predict(obs, deterministic=True)
-                obs, r, done, truncated, _ = env.step(action)
-                ep_r += r
-            rewards.append(ep_r)
-            if done and not truncated:
-                crashes += 1
-        env.close()
-
-        avg = float(np.mean(rewards))
-        surv = 100.0 * (1 - crashes / n_episodes)
-        results.append({
-            "seed": seed,
-            "desc": factory.describe_level(i),
-            "avg_reward": avg,
-            "survival_rate": surv,
-        })
-        print(f"  [{i:2d}] {factory.describe_level(i)}  "
-              f"R={avg:.2f}  Surv={surv:.0f}%")
-
-    avg_all = float(np.mean([r["avg_reward"] for r in results]))
-    surv_all = float(np.mean([r["survival_rate"] for r in results]))
-    print(f"\n  Overall: R={avg_all:.2f}  Surv={surv_all:.1f}%\n")
-    return results
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Watch agent
-# ──────────────────────────────────────────────────────────────────────────────
-def watch_agent(model, seeds: List[int], n_episodes: int = 3):
-    """Render the agent on a list of level seeds."""
-    factory = HighwayLevelFactory()
-
-    print(f"\n{'=' * 60}")
-    print("  WATCHING AGENT  (Ctrl-C to stop)")
-    print(f"  {len(seeds)} levels  ×  {n_episodes} episodes each")
-    print(f"{'=' * 60}\n")
-
-    try:
-        for si, seed in enumerate(seeds):
-            factors = seed_to_factors(seed)
-            print(f"  ── Level seed={seed}  "
-                  f"L={factors['lanes_count']}  V={factors['vehicles_count']}  "
-                  f"D={factors['vehicles_density']:.1f}  P={factors['politeness']:.2f}")
-            env = factory.make_env(seed, render=True)
-            try:
-                for ep in range(n_episodes):
-                    obs, _ = env.reset()
-                    env.render()
-                    done = truncated = False
-                    ep_r, steps = 0.0, 0
-                    while not (done or truncated):
-                        action, _ = model.predict(obs, deterministic=True)
-                        obs, r, done, truncated, _ = env.step(action)
-                        env.render()
-                        ep_r += r
-                        steps += 1
-                    tag = "CRASH" if (done and not truncated) else "SURVIVED"
-                    print(f"    Ep {ep+1}: {tag}  R={ep_r:.2f}  Steps={steps}")
-            finally:
-                env.close()
-            print()
-    except KeyboardInterrupt:
-        print("\n  Stopped by user")
-    print()
+from ppo_plr import evaluate_on_test_configs, watch_agent  # noqa: E402
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -694,26 +496,24 @@ def main():
     TRAIN           = True
     SKIP_EVALUATION = False
 
-    # Training budget
     TOTAL_TIMESTEPS  = 5_000_000
-    STEPS_PER_LEVEL  = 4_096
-    EVAL_EPISODES    = 10
+    STEPS_PER_LEVEL  = 10_000
+    EVAL_EPISODES    = 5
 
-    # PLR⊥ — MaxMC + rank (recommended for Robust PLR)
     PLR_STRATEGY         = "max_mc"
     PLR_RHO              = 0.6
-    PLR_NU               = 0.7            # replay rate ≈ 0.3
+    PLR_NU               = 0.7      # replay rate ≈ 0.3
     PLR_SCORE_TRANSFORM  = "rank"
     PLR_TEMPERATURE      = 0.1
     PLR_STALENESS_COEF   = 0.1
     PLR_ALPHA            = 1.0
-    ROBUST               = True  # PLR⊥: no gradient on explore levels
+    ROBUST               = True
 
-    SAVE_DIR = "highway_ppo_plr/v7"
+    SAVE_DIR = "highway_qrdqn_plr/v1"
     # ========================================================================
 
     if TRAIN:
-        model, sampler, history = train_ppo_plr_robust(
+        model, sampler, history = train_qrdqn_plr_robust(
             total_timesteps=TOTAL_TIMESTEPS,
             steps_per_level=STEPS_PER_LEVEL,
             eval_episodes=EVAL_EPISODES,
@@ -729,9 +529,8 @@ def main():
             verbose=1,
         )
     else:
-        # Remember to use checkpoint or model based on what you want to test
         device = get_device()
-        model = PPO.load(f"{SAVE_DIR}/checkpoint", device=device)
+        model = QRDQN.load(f"{SAVE_DIR}/checkpoint", device=device)
 
     # ── Λ_test evaluation (zero-shot generalisation) ──
     if not SKIP_EVALUATION:
@@ -740,13 +539,7 @@ def main():
         with open(save_path / "test_results.json", "w") as f:
             json.dump(test_results, f, indent=2, default=str)
 
-        train_results = evaluate_on_train_configs(model, n_episodes=5)
-        with open(save_path / "train_eval_results.json", "w") as f:
-            json.dump(train_results, f, indent=2, default=str)
-    else:
-        print("Skipping evaluation, jumping to visualisation...")
-
-    # ── watch on a sample of test levels ──
+    # ── watch on test levels ──
     watch_seeds = TEST_SEEDS[:5]
     watch_agent(model, watch_seeds, n_episodes=2)
 

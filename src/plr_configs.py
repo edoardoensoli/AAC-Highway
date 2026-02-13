@@ -5,8 +5,8 @@ PLR Environment Configurations — Seed-Based Parametric Levels
 Maps integer seeds deterministically to highway-env factors of variation:
 
   • lanes_count       ∈ {2, 3, 4, 5}
-  • vehicles_count    ∈ [10, 40]
-  • vehicles_density  ∈ [0.6, 2.0]
+  • vehicles_count    ∈ [20, 40]
+  • vehicles_density  ∈ [1.0, 1.5]   (capped to prevent unsolvable levels)
   • POLITENESS        ∈ [0.0, 1.0]   (MOBIL lane-change model coefficient)
 
 Observation space:
@@ -24,9 +24,9 @@ ranges so that held-out evaluation measures true zero-shot generalisation
 rather than overfitting to training levels.
 
 highway-env does NOT support setting POLITENESS through the config dict;
-HighwayLevelWrapper applies it by mutating the class and per-instance
-attribute after each reset (following the canonical pattern from
-highway-env's own IntersectionEnv).
+HighwayLevelWrapper applies it by setting **per-instance** attributes only
+(no class-level mutation) on every ``reset()`` and ``step()`` to handle
+mid-episode vehicle spawns without leaking state between wrapper instances.
 """
 
 from __future__ import annotations
@@ -35,15 +35,14 @@ from typing import Dict, List
 
 import gymnasium as gym
 import numpy as np
-from highway_env.vehicle.behavior import IDMVehicle
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Factor ranges
 # ─────────────────────────────────────────────────────────────────────────────
 LANES_OPTIONS = [2, 3, 4, 5]
-VEHICLES_RANGE = (20, 40)  
-DENSITY_RANGE = (1.0, 2.0)
+VEHICLES_RANGE = (20, 40)
+DENSITY_RANGE = (1.0, 1.5)       # capped at 1.5 to prevent unsolvable levels
 POLITENESS_RANGE = (0.0, 1.0)
 
 
@@ -155,12 +154,11 @@ class HighwayLevelWrapper(gym.Wrapper):
     # ── Gymnasium API ────────────────────────────────────────────────────
 
     def reset(self, **kwargs):
-        # Set class-level POLITENESS (handles newly-spawned NPCs mid-episode)
-        IDMVehicle.POLITENESS = self._factors["politeness"]
-
+        # NOTE: We do NOT touch IDMVehicle.POLITENESS (the class variable).
+        # Mutating the class leaks state between parallel wrapper instances.
         obs, info = super().reset(**kwargs)
 
-        # Also set per-instance to be safe
+        # Set per-instance POLITENESS for every NPC after reset
         pol = self._factors["politeness"]
         for v in self.unwrapped.road.vehicles:
             if v is not self.unwrapped.vehicle:
@@ -168,20 +166,39 @@ class HighwayLevelWrapper(gym.Wrapper):
 
         info["level_seed"] = self._level_seed
         info["politeness"] = pol
+        self._needs_reset = False
         return obs, info
 
     def step(self, action):
+        if getattr(self, "_needs_reset", False):
+            raise RuntimeError(
+                "HighwayLevelWrapper.step() called after set_level() "
+                "without an intervening reset().  Call env.reset() first."
+            )
         obs, reward, done, truncated, info = super().step(action)
+
+        # Re-apply per-instance POLITENESS for any newly spawned NPCs
+        pol = self._factors["politeness"]
+        for v in self.unwrapped.road.vehicles:
+            if v is not self.unwrapped.vehicle:
+                v.POLITENESS = pol
+
         return obs, reward, done, truncated, info
 
     def set_level(self, seed: int):
-        """Change the level for the next ``reset()``."""
+        """Change the level for the next ``reset()``.
+
+        .. important:: You **must** call ``reset()`` before the next
+           ``step()`` — no environment steps may be taken between
+           ``set_level()`` and ``reset()``.
+        """
         self._level_seed = seed
         self._factors = seed_to_factors(seed)
         cfg = self.unwrapped.config
         cfg["lanes_count"] = self._factors["lanes_count"]
         cfg["vehicles_count"] = self._factors["vehicles_count"]
         cfg["vehicles_density"] = self._factors["vehicles_density"]
+        self._needs_reset = True  # guard: forbid step() before reset()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

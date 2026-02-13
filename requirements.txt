@@ -6,3 +6,7 @@ pygame==2.6.1
 matplotlib==3.10.8
 pandas==2.3.3
 scipy==1.17.0
+stable_baselines3==1.8.0
+sb3-contrib==1.8.0
+torch==2.8.1
+tqdm==4.66.1
