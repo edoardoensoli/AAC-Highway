@@ -1,0 +1,109 @@
+{
+  "1000": {
+    "mean_return": 24.794246415793896,
+    "std_return": 21.449983171034877,
+    "mean_length": 115.6
+  },
+  "1001": {
+    "mean_return": 32.69740407232901,
+    "std_return": 22.529286855500207,
+    "mean_length": 144.6
+  },
+  "1002": {
+    "mean_return": 12.819593304395676,
+    "std_return": 23.900423632038603,
+    "mean_length": 73.2
+  },
+  "1003": {
+    "mean_return": 9.846449135616421,
+    "std_return": 8.68227587350536,
+    "mean_length": 72.4
+  },
+  "1004": {
+    "mean_return": 2.8753063142299653,
+    "std_return": 8.315358541700395,
+    "mean_length": 48.8
+  },
+  "1005": {
+    "mean_return": 58.04146129786968,
+    "std_return": 0.911154027910886,
+    "mean_length": 200.0
+  },
+  "1006": {
+    "mean_return": 27.14207919384353,
+    "std_return": 21.71203789147404,
+    "mean_length": 125.6
+  },
+  "1007": {
+    "mean_return": 5.480802199244499,
+    "std_return": 9.417790210842197,
+    "mean_length": 57.2
+  },
+  "1008": {
+    "mean_return": 4.883782345382497,
+    "std_return": 10.391180452563704,
+    "mean_length": 58.0
+  },
+  "1009": {
+    "mean_return": 52.09147723764181,
+    "std_return": 11.498783090679838,
+    "mean_length": 186.8
+  },
+  "1010": {
+    "mean_return": 20.920806687989334,
+    "std_return": 3.2076083512723694,
+    "mean_length": 128.2
+  },
+  "1011": {
+    "mean_return": 46.12093842476607,
+    "std_return": 16.979169424781873,
+    "mean_length": 173.4
+  },
+  "1012": {
+    "mean_return": 34.89323886483908,
+    "std_return": 27.749236499223542,
+    "mean_length": 137.2
+  },
+  "1013": {
+    "mean_return": 19.27539351134474,
+    "std_return": 17.72071299912029,
+    "mean_length": 109.2
+  },
+  "1014": {
+    "mean_return": 7.468147192895413,
+    "std_return": 6.975077984268686,
+    "mean_length": 64.2
+  },
+  "1015": {
+    "mean_return": 3.9926757767796515,
+    "std_return": 11.072545745641149,
+    "mean_length": 52.0
+  },
+  "1016": {
+    "mean_return": 10.082711256947473,
+    "std_return": 16.06180861973615,
+    "mean_length": 100.0
+  },
+  "1017": {
+    "mean_return": 57.10182090699673,
+    "std_return": 1.1816035421825473,
+    "mean_length": 200.0
+  },
+  "1018": {
+    "mean_return": 1.866535410284996,
+    "std_return": 5.852846217175119,
+    "mean_length": 45.6
+  },
+  "1019": {
+    "mean_return": 23.81421442851424,
+    "std_return": 20.064786313719885,
+    "mean_length": 112.4
+  },
+  "aggregate": {
+    "mean_return": 22.810454198885235,
+    "std_return": 23.783589160579986,
+    "num_seeds": 20,
+    "num_episodes": 100,
+    "action_dist": "L_LEFT=54%  IDLE=12%  L_RIGHT=14%  FASTER=16%  SLOWER=4%"
+  }
+}

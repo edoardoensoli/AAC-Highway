@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: aac-highway
+Version: 0.1.0
+Summary: AAC Highway Environment Project
+Requires-Python: >=3.8
+License-File: LICENSE
+Requires-Dist: highway-env==1.10.2
+Requires-Dist: gymnasium==1.2.3
+Requires-Dist: numpy==2.4.1
+Requires-Dist: pygame==2.6.1
+Requires-Dist: matplotlib==3.10.8
+Requires-Dist: pandas==2.3.3
+Requires-Dist: scipy==1.17.0
+Dynamic: license-file
