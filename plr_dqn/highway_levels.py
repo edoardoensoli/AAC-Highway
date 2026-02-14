@@ -19,7 +19,7 @@ import torch
 # Register highway-env environments
 import highway_env  # noqa: F401
 
-# ── Import from local plr_configs (same package) ────────────────────────────
+# Import from local plr_configs (same package) 
 from plr_dqn.plr_configs import (
     seed_to_factors,
     seed_to_config,
@@ -33,18 +33,13 @@ from plr_dqn.plr_configs import (
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Observation shape  (derived from the Kinematics config)
-# ─────────────────────────────────────────────────────────────────────────────
+# Observation shape (derived from Kinematics config)
 _num_vehicles = OBSERVATION_CFG["vehicles_count"]   # 10
-_num_features = len(OBSERVATION_CFG["features"])    # 7
-OBS_SHAPE = (_num_vehicles * _num_features,)        # (70,) — flattened
-NUM_ACTIONS = 5  # DiscreteMetaAction: LANE_LEFT, IDLE, LANE_RIGHT, FASTER, SLOWER
+_num_features = len(OBSERVATION_CFG["features"])
+OBS_SHAPE = (_num_vehicles * _num_features,)
+NUM_ACTIONS = 5
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Config builder (strips meta keys for gym.make)
-# ─────────────────────────────────────────────────────────────────────────────
 def _gym_config(seed: int) -> dict:
     """Build a config dict suitable for gym.make (no meta keys)."""
     return config_for_gym(seed_to_config(seed))
@@ -65,9 +60,6 @@ def make_flat_env(seed: int = 0, render: bool = False) -> gym.Env:
     return env
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HighwayVecEnv — single-process vectorised env wrapper
-# ─────────────────────────────────────────────────────────────────────────────
 class HighwayVecEnv:
     """
     Minimal single-process "vector" env that wraps one HighwayLevelWrapper.
@@ -97,8 +89,6 @@ class HighwayVecEnv:
         env = gym.make("highway-fast-v0", config=cfg, render_mode=self._render_mode)
         return HighwayLevelWrapper(env, seed=seed)
 
-    # ── level interface ──────────────────────────────────────────────────
-
     def set_level(self, seed: int):
         """Configure the next episode to use ``seed``."""
         self._current_seed = seed
@@ -106,8 +96,6 @@ class HighwayVecEnv:
 
     def get_level_seed(self) -> int:
         return self._current_seed
-
-    # ── gym-like interface ───────────────────────────────────────────────
 
     def reset(self) -> torch.Tensor:
         """Reset and return obs tensor (1, C, H, W)."""
@@ -169,8 +157,6 @@ class HighwayVecEnv:
             obs = self.reset()
         return obs, reward, mask, bad_mask, info
 
-    # ── helpers ──────────────────────────────────────────────────────────
-
     def _obs_to_tensor(self, obs: np.ndarray) -> torch.Tensor:
         """Convert observation to float tensor with batch dim, flattened."""
         t = torch.from_numpy(np.asarray(obs, dtype=np.float32)).flatten()
@@ -189,9 +175,6 @@ class HighwayVecEnv:
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SubprocVecEnv — multiprocessing vectorised env (N parallel workers)
-# ─────────────────────────────────────────────────────────────────────────────
 import multiprocessing as mp
 
 
@@ -356,15 +339,9 @@ class SubprocVecEnv:
             p.join(timeout=5)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Test seeds (re-exported for convenience)
-# ─────────────────────────────────────────────────────────────────────────────
-EVAL_SEEDS = TEST_SEEDS  # [1000, 1001, ..., 1019]
+EVAL_SEEDS = TEST_SEEDS
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Quick smoke-test
-# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print(f"OBS_SHAPE  = {OBS_SHAPE}")
     print(f"NUM_ACTIONS = {NUM_ACTIONS}")

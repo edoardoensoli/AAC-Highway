@@ -33,7 +33,7 @@ class LevelStore:
     def __len__(self) -> int:
         return len(self.levels)
 
-    # ── insert ───────────────────────────────────────────────────────────────
+    # insert and remove levels (with optional parent tracking)
 
     def _insert(self, level: Any, parent_seed: Optional[int] = None) -> Optional[int]:
         if level is None:
@@ -77,7 +77,7 @@ class LevelStore:
         else:
             return self._insert(level)
 
-    # ── remove ───────────────────────────────────────────────────────────────
+    #  remove ─
 
     def _remove(self, level_seed: int):
         if level_seed is None or level_seed < 0:
@@ -95,7 +95,7 @@ class LevelStore:
         else:
             self._remove(level_seed)
 
-    # ── query ────────────────────────────────────────────────────────────────
+    #  query 
 
     def get_level(self, level_seed: int) -> Any:
         return self.seed2level[level_seed]

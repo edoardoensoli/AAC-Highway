@@ -90,7 +90,7 @@ class LevelSampler:
         self.seed_buffer_size = seed_buffer_size
         self.seed_buffer_priority = seed_buffer_priority
 
-        # ── Working buffer arrays ────────────────────────────────────────
+        # Working buffer arrays
         N = seed_buffer_size
         self.seeds = np.zeros(N, dtype=np.int64) - 1  # -1 = empty slot
         self.seed2index: Dict[int, int] = {}
@@ -103,7 +103,7 @@ class LevelSampler:
         self.running_sample_count = 0
         self.working_seed_buffer_size = 0
 
-        # ── Staging data (infinite seed support) ─────────────────────────
+        #  Staging data (infinite seed support) 
         self.staging_seed_set: Set[int] = set()
         self.working_seed_set: Set[int] = set()
         self.seed2actor: Dict[int, set] = defaultdict(set)
@@ -115,7 +115,7 @@ class LevelSampler:
             {} for _ in range(num_actors)
         ]
 
-    # ── Properties ───────────────────────────────────────────────────────
+    #  Properties ─
 
     @property
     def _proportion_filled(self) -> float:
@@ -139,7 +139,7 @@ class LevelSampler:
             else:
                 return self.seed_scores.argmin()
 
-    # ── External unseen sample (called when new levels are generated) ────
+    #  External unseen sample (called when new levels are generated) 
 
     def observe_external_unseen_sample(self, seeds, solvable=None):
         """Register newly generated seeds in the staging set."""
@@ -153,7 +153,7 @@ class LevelSampler:
                 if seed_idx is not None:
                     self._update_staleness(seed_idx)
 
-    # ── Replay decision ──────────────────────────────────────────────────
+    #  Replay decision 
 
     def sample_replay_decision(self) -> bool:
         """Decide whether to replay (True) or explore (False)."""
@@ -174,7 +174,7 @@ class LevelSampler:
         else:
             return False
 
-    # ── Level sampling ───────────────────────────────────────────────────
+    #  Level sampling ─
 
     def sample_replay_level(self) -> int:
         """Sample a seed from the working buffer."""
@@ -208,7 +208,7 @@ class LevelSampler:
         self.staging_seed_set.add(seed)
         return seed
 
-    # ── Score updates ────────────────────────────────────────────────────
+    #  Score updates 
 
     def update_seed_score(
         self, actor_index: int, seed: int, score: float, num_steps: int
@@ -306,7 +306,7 @@ class LevelSampler:
             self.partial_seed_scores_buffer[actor_index][seed] = merged_score
             self.partial_seed_steps_buffer[actor_index][seed] = running_num_steps
 
-    # ── Update with rollout data (called after each rollout) ─────────────
+    #  Update with rollout data (called after each rollout) ─
 
     @property
     def requires_value_buffers(self) -> bool:
@@ -421,7 +421,7 @@ class LevelSampler:
         else:
             raise ValueError(f"Unsupported strategy: {self.strategy}")
 
-    # ── Score functions (from DCD) ───────────────────────────────────────
+    #  Score functions (from DCD) ─
 
     @staticmethod
     def _value_l1(**kwargs) -> float:
@@ -477,7 +477,7 @@ class LevelSampler:
         margin = (top2[:, 0] - top2[:, 1]).mean()
         return (1 - margin).item()
 
-    # ── After PPO update ─────────────────────────────────────────────────
+    #  After PPO update ─
 
     def after_update(self):
         """Reset partial scores (weights changed, logits are stale)."""
@@ -503,14 +503,14 @@ class LevelSampler:
                         actor_index, seed, 0, 0, done=True
                     )
 
-    # ── Staleness ────────────────────────────────────────────────────────
+    #  Staleness 
 
     def _update_staleness(self, selected_idx: int):
         if self.staleness_coef > 0:
             self.seed_staleness += 1
             self.seed_staleness[selected_idx] = 0
 
-    # ── Sampling weights ─────────────────────────────────────────────────
+    # Sampling weights 
 
     def sample_weights(self) -> np.ndarray:
         weights = self._score_transform_fn(
@@ -577,7 +577,7 @@ class LevelSampler:
         else:
             return np.ones_like(scores)
 
-    # ── Stats / Diagnostics ──────────────────────────────────────────────
+    # Stats / Diagnostics 
 
     def get_stats(self) -> Dict[str, float]:
         seen = self.unseen_seed_weights == 0

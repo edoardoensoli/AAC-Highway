@@ -773,6 +773,726 @@
         405551332
       ],
       "replay_buffer_size": 100000
+    },
+    {
+      "update": 705,
+      "total_steps": 2888832,
+      "mean_return": -7.0623501705425475,
+      "mean_length": 19.76,
+      "dqn_loss": 0.778302428778261,
+      "epsilon": 0.6479488,
+      "replay_ratio": 0.94,
+      "fps": 601.1048835469395,
+      "is_replay": true,
+      "level_seeds": [
+        405551332,
+        405551332,
+        405551332,
+        405551332
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 710,
+      "total_steps": 2909312,
+      "mean_return": -1.9496254369477537,
+      "mean_length": 35.28,
+      "dqn_loss": 0.8707430076319724,
+      "epsilon": 0.6387328,
+      "replay_ratio": 0.94,
+      "fps": 588.9034005480697,
+      "is_replay": true,
+      "level_seeds": [
+        1686041736,
+        1686041736,
+        1686041736,
+        1686041736
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 715,
+      "total_steps": 2929792,
+      "mean_return": -6.079947623014378,
+      "mean_length": 19.88,
+      "dqn_loss": 0.9238878105534241,
+      "epsilon": 0.6295168,
+      "replay_ratio": 0.95,
+      "fps": 577.327056474336,
+      "is_replay": true,
+      "level_seeds": [
+        787332362,
+        787332362,
+        787332362,
+        787332362
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 720,
+      "total_steps": 2950272,
+      "mean_return": -7.306035665841005,
+      "mean_length": 14.59,
+      "dqn_loss": 0.8983494321582839,
+      "epsilon": 0.6203008,
+      "replay_ratio": 0.94,
+      "fps": 569.8980762559443,
+      "is_replay": true,
+      "level_seeds": [
+        1946947490,
+        1946947490,
+        1946947490,
+        1946947490
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 725,
+      "total_steps": 2970752,
+      "mean_return": -7.375213540192053,
+      "mean_length": 13.94,
+      "dqn_loss": 0.9896099213510752,
+      "epsilon": 0.6110848,
+      "replay_ratio": 0.93,
+      "fps": 562.1638339405101,
+      "is_replay": true,
+      "level_seeds": [
+        12752912,
+        12752912,
+        12752912,
+        12752912
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 730,
+      "total_steps": 2991232,
+      "mean_return": -6.496401819993371,
+      "mean_length": 19.33,
+      "dqn_loss": 0.8754186888691038,
+      "epsilon": 0.6018688,
+      "replay_ratio": 0.92,
+      "fps": 556.8651652914807,
+      "is_replay": true,
+      "level_seeds": [
+        1616816855,
+        1616816855,
+        1616816855,
+        1616816855
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 735,
+      "total_steps": 3011712,
+      "mean_return": -5.288470155186182,
+      "mean_length": 26.15,
+      "dqn_loss": 0.84976328141056,
+      "epsilon": 0.5926528,
+      "replay_ratio": 0.92,
+      "fps": 550.1299308981764,
+      "is_replay": true,
+      "level_seeds": [
+        569106410,
+        569106410,
+        569106410,
+        569106410
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 740,
+      "total_steps": 3032192,
+      "mean_return": -3.2544227208273515,
+      "mean_length": 30.19,
+      "dqn_loss": 0.8000863566994667,
+      "epsilon": 0.5834368000000001,
+      "replay_ratio": 0.92,
+      "fps": 543.5075711710433,
+      "is_replay": true,
+      "level_seeds": [
+        1189409886,
+        1189409886,
+        1189409886,
+        1189409886
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 745,
+      "total_steps": 3052672,
+      "mean_return": -6.518343565295713,
+      "mean_length": 19.69,
+      "dqn_loss": 0.758737203956116,
+      "epsilon": 0.5742208,
+      "replay_ratio": 0.93,
+      "fps": 535.6190197872155,
+      "is_replay": true,
+      "level_seeds": [
+        2045789644,
+        2045789644,
+        2045789644,
+        2045789644
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 750,
+      "total_steps": 3073152,
+      "mean_return": -6.9587234357845045,
+      "mean_length": 17.81,
+      "dqn_loss": 0.7711465033935383,
+      "epsilon": 0.5650048000000001,
+      "replay_ratio": 0.92,
+      "fps": 523.985724040631,
+      "is_replay": true,
+      "level_seeds": [
+        185572588,
+        185572588,
+        185572588,
+        185572588
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 755,
+      "total_steps": 3093632,
+      "mean_return": -6.447106438466226,
+      "mean_length": 18.25,
+      "dqn_loss": 0.8284572158008814,
+      "epsilon": 0.5557888,
+      "replay_ratio": 0.92,
+      "fps": 511.11324050763375,
+      "is_replay": true,
+      "level_seeds": [
+        1286066445,
+        1286066445,
+        1286066445,
+        1286066445
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 760,
+      "total_steps": 3114112,
+      "mean_return": -4.751119218653657,
+      "mean_length": 24.35,
+      "dqn_loss": 0.801922881801147,
+      "epsilon": 0.5465728,
+      "replay_ratio": 0.92,
+      "fps": 505.97297627024574,
+      "is_replay": true,
+      "level_seeds": [
+        2135392492,
+        2135392492,
+        2135392492,
+        2135392492
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 765,
+      "total_steps": 3134592,
+      "mean_return": -6.110907135135822,
+      "mean_length": 19.21,
+      "dqn_loss": 0.7967555751092732,
+      "epsilon": 0.5373568,
+      "replay_ratio": 0.93,
+      "fps": 502.43951669417356,
+      "is_replay": true,
+      "level_seeds": [
+        976033872,
+        976033872,
+        976033872,
+        976033872
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 770,
+      "total_steps": 3155072,
+      "mean_return": -4.647076078935303,
+      "mean_length": 22.98,
+      "dqn_loss": 0.773321989690885,
+      "epsilon": 0.5281408000000001,
+      "replay_ratio": 0.92,
+      "fps": 498.97967216396864,
+      "is_replay": false,
+      "level_seeds": [
+        610252526,
+        285881920,
+        1611483023,
+        280670527
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 775,
+      "total_steps": 3175552,
+      "mean_return": -6.817096800156659,
+      "mean_length": 16.27,
+      "dqn_loss": 0.7527408393798396,
+      "epsilon": 0.5189248,
+      "replay_ratio": 0.93,
+      "fps": 495.0383144946773,
+      "is_replay": true,
+      "level_seeds": [
+        1010417074,
+        1010417074,
+        1010417074,
+        1010417074
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 780,
+      "total_steps": 3196032,
+      "mean_return": -2.648177259412332,
+      "mean_length": 30.48,
+      "dqn_loss": 0.7133970897411928,
+      "epsilon": 0.5097088,
+      "replay_ratio": 0.94,
+      "fps": 491.2030495092108,
+      "is_replay": true,
+      "level_seeds": [
+        1285622141,
+        1285622141,
+        1285622141,
+        1285622141
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 785,
+      "total_steps": 3216512,
+      "mean_return": -7.272747979303364,
+      "mean_length": 15.1,
+      "dqn_loss": 0.6980776876443997,
+      "epsilon": 0.5004928,
+      "replay_ratio": 0.94,
+      "fps": 488.82977716551403,
+      "is_replay": true,
+      "level_seeds": [
+        552394999,
+        552394999,
+        552394999,
+        552394999
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 790,
+      "total_steps": 3236992,
+      "mean_return": -4.391495539590908,
+      "mean_length": 26.12,
+      "dqn_loss": 0.6679306991281919,
+      "epsilon": 0.49127679999999996,
+      "replay_ratio": 0.94,
+      "fps": 486.6301840434834,
+      "is_replay": true,
+      "level_seeds": [
+        1637953682,
+        1637953682,
+        1637953682,
+        1637953682
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 795,
+      "total_steps": 3257472,
+      "mean_return": -2.5949253987300405,
+      "mean_length": 30.85,
+      "dqn_loss": 0.7055688246618956,
+      "epsilon": 0.48206079999999996,
+      "replay_ratio": 0.94,
+      "fps": 481.85689117161934,
+      "is_replay": true,
+      "level_seeds": [
+        1052748088,
+        1052748088,
+        1052748088,
+        1052748088
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 800,
+      "total_steps": 3277952,
+      "mean_return": -6.593604424243388,
+      "mean_length": 18.36,
+      "dqn_loss": 0.6654370387550443,
+      "epsilon": 0.47284479999999995,
+      "replay_ratio": 0.95,
+      "fps": 478.5514410122161,
+      "is_replay": true,
+      "level_seeds": [
+        196222130,
+        196222130,
+        196222130,
+        196222130
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 805,
+      "total_steps": 3298432,
+      "mean_return": -6.56439208232349,
+      "mean_length": 19.32,
+      "dqn_loss": 0.7060819229809567,
+      "epsilon": 0.46362879999999995,
+      "replay_ratio": 0.95,
+      "fps": 472.0538024853114,
+      "is_replay": true,
+      "level_seeds": [
+        1363363767,
+        1363363767,
+        1363363767,
+        1363363767
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 810,
+      "total_steps": 3318912,
+      "mean_return": -2.9389190242368866,
+      "mean_length": 28.88,
+      "dqn_loss": 0.6355337814311497,
+      "epsilon": 0.45441280000000006,
+      "replay_ratio": 0.95,
+      "fps": 466.82694599384354,
+      "is_replay": true,
+      "level_seeds": [
+        1568251747,
+        1568251747,
+        1568251747,
+        1568251747
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 815,
+      "total_steps": 3339392,
+      "mean_return": -6.9074516319832835,
+      "mean_length": 17.99,
+      "dqn_loss": 0.7245826689759269,
+      "epsilon": 0.44519679999999995,
+      "replay_ratio": 0.95,
+      "fps": 465.7873070982566,
+      "is_replay": true,
+      "level_seeds": [
+        1363363767,
+        1363363767,
+        1363363767,
+        1363363767
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 820,
+      "total_steps": 3359872,
+      "mean_return": -6.477359278175213,
+      "mean_length": 18.09,
+      "dqn_loss": 0.7286747087491676,
+      "epsilon": 0.43598079999999995,
+      "replay_ratio": 0.96,
+      "fps": 462.3154225878912,
+      "is_replay": true,
+      "level_seeds": [
+        1363363767,
+        1363363767,
+        1363363767,
+        1363363767
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 825,
+      "total_steps": 3380352,
+      "mean_return": -7.223817045572796,
+      "mean_length": 12.8,
+      "dqn_loss": 0.7980303391814232,
+      "epsilon": 0.42676479999999994,
+      "replay_ratio": 0.95,
+      "fps": 457.8204559680614,
+      "is_replay": false,
+      "level_seeds": [
+        905960942,
+        452478103,
+        813825228,
+        340146875
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 830,
+      "total_steps": 3400832,
+      "mean_return": -5.62200429112243,
+      "mean_length": 20.6,
+      "dqn_loss": 0.7949546137824655,
+      "epsilon": 0.41754880000000005,
+      "replay_ratio": 0.96,
+      "fps": 454.3352818754746,
+      "is_replay": true,
+      "level_seeds": [
+        81920048,
+        81920048,
+        81920048,
+        81920048
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 835,
+      "total_steps": 3421312,
+      "mean_return": -5.856137093103776,
+      "mean_length": 19.02,
+      "dqn_loss": 0.8204712005099282,
+      "epsilon": 0.40833279999999994,
+      "replay_ratio": 0.96,
+      "fps": 449.863855923445,
+      "is_replay": true,
+      "level_seeds": [
+        68506942,
+        68506942,
+        68506942,
+        68506942
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 840,
+      "total_steps": 3441792,
+      "mean_return": -4.239721196638593,
+      "mean_length": 23.82,
+      "dqn_loss": 0.8146635672310367,
+      "epsilon": 0.39911679999999994,
+      "replay_ratio": 0.96,
+      "fps": 446.180154296929,
+      "is_replay": true,
+      "level_seeds": [
+        1574121875,
+        1574121875,
+        1574121875,
+        1574121875
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 845,
+      "total_steps": 3462272,
+      "mean_return": -3.32082560207476,
+      "mean_length": 33.6,
+      "dqn_loss": 0.8510037460364401,
+      "epsilon": 0.38990079999999994,
+      "replay_ratio": 0.96,
+      "fps": 444.32012090930397,
+      "is_replay": true,
+      "level_seeds": [
+        1637953682,
+        1637953682,
+        1637953682,
+        1637953682
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 850,
+      "total_steps": 3482752,
+      "mean_return": -3.673427176133787,
+      "mean_length": 35.31,
+      "dqn_loss": 0.7815547390491702,
+      "epsilon": 0.38068480000000005,
+      "replay_ratio": 0.96,
+      "fps": 441.7920686170652,
+      "is_replay": true,
+      "level_seeds": [
+        76958078,
+        76958078,
+        76958078,
+        76958078
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 855,
+      "total_steps": 3503232,
+      "mean_return": -6.646852730656974,
+      "mean_length": 14.68,
+      "dqn_loss": 0.8510586170013994,
+      "epsilon": 0.37146880000000004,
+      "replay_ratio": 0.96,
+      "fps": 436.69969507106043,
+      "is_replay": true,
+      "level_seeds": [
+        905960942,
+        905960942,
+        905960942,
+        905960942
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 860,
+      "total_steps": 3523712,
+      "mean_return": -1.8255870051630012,
+      "mean_length": 39.43,
+      "dqn_loss": 0.8287110247183591,
+      "epsilon": 0.36225279999999993,
+      "replay_ratio": 0.96,
+      "fps": 434.66305076772437,
+      "is_replay": true,
+      "level_seeds": [
+        1611483023,
+        1611483023,
+        1611483023,
+        1611483023
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 865,
+      "total_steps": 3544192,
+      "mean_return": -1.3767672440485894,
+      "mean_length": 34.89,
+      "dqn_loss": 0.7826371401315555,
+      "epsilon": 0.35303679999999993,
+      "replay_ratio": 0.95,
+      "fps": 431.1034880006089,
+      "is_replay": true,
+      "level_seeds": [
+        1537411227,
+        1537411227,
+        1537411227,
+        1537411227
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 870,
+      "total_steps": 3564672,
+      "mean_return": -6.452201624877827,
+      "mean_length": 22.93,
+      "dqn_loss": 0.8054130928358063,
+      "epsilon": 0.34382080000000004,
+      "replay_ratio": 0.96,
+      "fps": 428.3276366175289,
+      "is_replay": true,
+      "level_seeds": [
+        938812426,
+        938812426,
+        938812426,
+        938812426
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 875,
+      "total_steps": 3585152,
+      "mean_return": -3.002705142772346,
+      "mean_length": 35.11,
+      "dqn_loss": 0.7549617069307715,
+      "epsilon": 0.33460480000000004,
+      "replay_ratio": 0.96,
+      "fps": 427.21080216332837,
+      "is_replay": true,
+      "level_seeds": [
+        582129930,
+        582129930,
+        582129930,
+        582129930
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 880,
+      "total_steps": 3605632,
+      "mean_return": -5.976347468898457,
+      "mean_length": 17.16,
+      "dqn_loss": 0.7588042780407704,
+      "epsilon": 0.3253887999999999,
+      "replay_ratio": 0.96,
+      "fps": 423.29979260694074,
+      "is_replay": true,
+      "level_seeds": [
+        1946947490,
+        1946947490,
+        1946947490,
+        1946947490
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 885,
+      "total_steps": 3626112,
+      "mean_return": -1.56687636955161,
+      "mean_length": 31.88,
+      "dqn_loss": 0.8009293960640207,
+      "epsilon": 0.3161727999999999,
+      "replay_ratio": 0.96,
+      "fps": 420.95187709797955,
+      "is_replay": true,
+      "level_seeds": [
+        91246559,
+        91246559,
+        91246559,
+        91246559
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 890,
+      "total_steps": 3646592,
+      "mean_return": -5.23128570339075,
+      "mean_length": 19.8,
+      "dqn_loss": 0.8212012173025869,
+      "epsilon": 0.30695680000000003,
+      "replay_ratio": 0.96,
+      "fps": 418.57188223203065,
+      "is_replay": true,
+      "level_seeds": [
+        1295613088,
+        1295613088,
+        1295613088,
+        1295613088
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 895,
+      "total_steps": 3667072,
+      "mean_return": -3.142361258463211,
+      "mean_length": 27.19,
+      "dqn_loss": 0.8253768687136471,
+      "epsilon": 0.2977408,
+      "replay_ratio": 0.96,
+      "fps": 416.3916679049218,
+      "is_replay": true,
+      "level_seeds": [
+        426130965,
+        426130965,
+        426130965,
+        426130965
+      ],
+      "replay_buffer_size": 100000
+    },
+    {
+      "update": 900,
+      "total_steps": 3687552,
+      "mean_return": -4.847462167272207,
+      "mean_length": 28.2,
+      "dqn_loss": 0.8463579579256475,
+      "epsilon": 0.2885248,
+      "replay_ratio": 0.96,
+      "fps": 415.37185614504546,
+      "is_replay": true,
+      "level_seeds": [
+        24888157,
+        24888157,
+        24888157,
+        24888157
+      ],
+      "replay_buffer_size": 100000
     }
   ],
   "eval_results": [
@@ -1329,6 +2049,450 @@
         "num_seeds": 20,
         "num_episodes": 60,
         "action_dist": "L_LEFT=19%  IDLE=15%  L_RIGHT=16%  FASTER=32%  SLOWER=17%"
+      }
+    },
+    {
+      "update": 750,
+      "total_steps": 3073152,
+      "1000": {
+        "mean_return": 12.629751150806745,
+        "std_return": 15.040405252403424,
+        "mean_length": 68.0
+      },
+      "1001": {
+        "mean_return": 18.073901782433193,
+        "std_return": 11.574891122304107,
+        "mean_length": 87.0
+      },
+      "1002": {
+        "mean_return": 12.277829134215912,
+        "std_return": 16.900355506242075,
+        "mean_length": 69.66666666666667
+      },
+      "1003": {
+        "mean_return": 11.26156263520943,
+        "std_return": 16.44927269211027,
+        "mean_length": 69.33333333333333
+      },
+      "1004": {
+        "mean_return": -6.705562309672435,
+        "std_return": 2.4199812259008024,
+        "mean_length": 16.333333333333332
+      },
+      "1005": {
+        "mean_return": 21.69524813971172,
+        "std_return": 15.019967163645688,
+        "mean_length": 92.33333333333333
+      },
+      "1006": {
+        "mean_return": 27.824063474405943,
+        "std_return": 7.132575790580048,
+        "mean_length": 120.0
+      },
+      "1007": {
+        "mean_return": -6.731062628668345,
+        "std_return": 1.8857621039057044,
+        "mean_length": 15.333333333333334
+      },
+      "1008": {
+        "mean_return": -1.5396470671664133,
+        "std_return": 1.5430707730540063,
+        "mean_length": 53.0
+      },
+      "1009": {
+        "mean_return": 4.137839861214161,
+        "std_return": 11.74173893282205,
+        "mean_length": 53.0
+      },
+      "1010": {
+        "mean_return": 6.787829329864679,
+        "std_return": 9.698722357694766,
+        "mean_length": 76.0
+      },
+      "1011": {
+        "mean_return": -4.409145486851533,
+        "std_return": 4.674936639081963,
+        "mean_length": 21.666666666666668
+      },
+      "1012": {
+        "mean_return": -4.5196398968497915,
+        "std_return": 3.8466761950802995,
+        "mean_length": 23.0
+      },
+      "1013": {
+        "mean_return": 2.234495279150233,
+        "std_return": 7.17666472161396,
+        "mean_length": 94.0
+      },
+      "1014": {
+        "mean_return": -2.3523238437871137,
+        "std_return": 4.915663528958414,
+        "mean_length": 30.0
+      },
+      "1015": {
+        "mean_return": 6.974584621887971,
+        "std_return": 19.183829109460266,
+        "mean_length": 54.333333333333336
+      },
+      "1016": {
+        "mean_return": -2.231140206917189,
+        "std_return": 3.388758503790682,
+        "mean_length": 37.666666666666664
+      },
+      "1017": {
+        "mean_return": 28.201223354786634,
+        "std_return": 8.398414564677141,
+        "mean_length": 112.0
+      },
+      "1018": {
+        "mean_return": -6.364532527824243,
+        "std_return": 2.8333100090073757,
+        "mean_length": 13.666666666666666
+      },
+      "1019": {
+        "mean_return": 15.958374621798484,
+        "std_return": 15.308247152437778,
+        "mean_length": 106.33333333333333
+      },
+      "aggregate": {
+        "mean_return": 6.660182470887402,
+        "std_return": 15.351069921884578,
+        "num_seeds": 20,
+        "num_episodes": 60,
+        "action_dist": "L_LEFT=20%  IDLE=5%  L_RIGHT=17%  FASTER=45%  SLOWER=13%"
+      }
+    },
+    {
+      "update": 800,
+      "total_steps": 3277952,
+      "1000": {
+        "mean_return": 13.033839151263237,
+        "std_return": 3.118841673214868,
+        "mean_length": 78.66666666666667
+      },
+      "1001": {
+        "mean_return": 24.929302538434666,
+        "std_return": 14.139788974072335,
+        "mean_length": 97.0
+      },
+      "1002": {
+        "mean_return": 6.542272023235758,
+        "std_return": 16.7832901480011,
+        "mean_length": 51.666666666666664
+      },
+      "1003": {
+        "mean_return": 33.047280725091696,
+        "std_return": 0.9852834258339849,
+        "mean_length": 120.0
+      },
+      "1004": {
+        "mean_return": -1.0794995998342831,
+        "std_return": 4.442761381654016,
+        "mean_length": 33.0
+      },
+      "1005": {
+        "mean_return": 29.50279901797573,
+        "std_return": 7.446226767670843,
+        "mean_length": 112.66666666666667
+      },
+      "1006": {
+        "mean_return": 19.45603645605426,
+        "std_return": 17.8057492933271,
+        "mean_length": 93.0
+      },
+      "1007": {
+        "mean_return": -5.189104400575161,
+        "std_return": 1.1256252122951929,
+        "mean_length": 18.333333333333332
+      },
+      "1008": {
+        "mean_return": -3.4713169834261257,
+        "std_return": 3.0965747687830745,
+        "mean_length": 39.333333333333336
+      },
+      "1009": {
+        "mean_return": -2.0636965185403824,
+        "std_return": 0.5946997513149668,
+        "mean_length": 27.666666666666668
+      },
+      "1010": {
+        "mean_return": 20.70404967013556,
+        "std_return": 7.809493094010937,
+        "mean_length": 120.0
+      },
+      "1011": {
+        "mean_return": 1.0363557835419972,
+        "std_return": 5.699109359470166,
+        "mean_length": 42.0
+      },
+      "1012": {
+        "mean_return": 6.614099032056099,
+        "std_return": 20.227226453545825,
+        "mean_length": 53.666666666666664
+      },
+      "1013": {
+        "mean_return": 11.86493128048206,
+        "std_return": 10.991535623158304,
+        "mean_length": 89.0
+      },
+      "1014": {
+        "mean_return": -3.4809546172618866,
+        "std_return": 0.7179867075798405,
+        "mean_length": 23.666666666666668
+      },
+      "1015": {
+        "mean_return": 0.173572838306427,
+        "std_return": 5.641720943718723,
+        "mean_length": 35.0
+      },
+      "1016": {
+        "mean_return": 15.37957039910099,
+        "std_return": 15.832984830881612,
+        "mean_length": 90.0
+      },
+      "1017": {
+        "mean_return": 22.492665347953636,
+        "std_return": 17.415680505829258,
+        "mean_length": 89.33333333333333
+      },
+      "1018": {
+        "mean_return": -4.827146781298022,
+        "std_return": 0.5952445375920653,
+        "mean_length": 21.666666666666668
+      },
+      "1019": {
+        "mean_return": 14.621861031222592,
+        "std_return": 14.620326606987128,
+        "mean_length": 82.0
+      },
+      "aggregate": {
+        "mean_return": 9.964345819695943,
+        "std_return": 16.061493984774998,
+        "num_seeds": 20,
+        "num_episodes": 60,
+        "action_dist": "L_LEFT=29%  IDLE=17%  L_RIGHT=17%  FASTER=31%  SLOWER=7%"
+      }
+    },
+    {
+      "update": 850,
+      "total_steps": 3482752,
+      "1000": {
+        "mean_return": 9.586154480775198,
+        "std_return": 9.22562873954326,
+        "mean_length": 68.0
+      },
+      "1001": {
+        "mean_return": 21.951248762852106,
+        "std_return": 4.712500289715522,
+        "mean_length": 116.33333333333333
+      },
+      "1002": {
+        "mean_return": -0.3373388623197873,
+        "std_return": 1.325074334052355,
+        "mean_length": 35.0
+      },
+      "1003": {
+        "mean_return": 5.5082773311714845,
+        "std_return": 13.70291252086125,
+        "mean_length": 55.666666666666664
+      },
+      "1004": {
+        "mean_return": 4.095988173037767,
+        "std_return": 9.519713384706698,
+        "mean_length": 53.0
+      },
+      "1005": {
+        "mean_return": 6.028887674212456,
+        "std_return": 7.2851781282561765,
+        "mean_length": 55.666666666666664
+      },
+      "1006": {
+        "mean_return": 14.357787733214488,
+        "std_return": 14.465315734844253,
+        "mean_length": 88.0
+      },
+      "1007": {
+        "mean_return": -3.529472624262174,
+        "std_return": 5.336005266698197,
+        "mean_length": 24.333333333333332
+      },
+      "1008": {
+        "mean_return": 3.0679332423533197,
+        "std_return": 10.636811624966537,
+        "mean_length": 65.0
+      },
+      "1009": {
+        "mean_return": 11.623316884040833,
+        "std_return": 16.97254200772702,
+        "mean_length": 63.0
+      },
+      "1010": {
+        "mean_return": 10.309298280343603,
+        "std_return": 9.154947830130347,
+        "mean_length": 100.33333333333333
+      },
+      "1011": {
+        "mean_return": -0.45995035270849866,
+        "std_return": 7.428940433666445,
+        "mean_length": 33.666666666666664
+      },
+      "1012": {
+        "mean_return": -5.4551262855529785,
+        "std_return": 2.2984108238962095,
+        "mean_length": 16.333333333333332
+      },
+      "1013": {
+        "mean_return": 15.656404536841322,
+        "std_return": 3.876807601150047,
+        "mean_length": 120.0
+      },
+      "1014": {
+        "mean_return": -5.962314211035846,
+        "std_return": 1.853822006254105,
+        "mean_length": 20.333333333333332
+      },
+      "1015": {
+        "mean_return": -4.239138724903266,
+        "std_return": 4.017729039895595,
+        "mean_length": 22.333333333333332
+      },
+      "1016": {
+        "mean_return": 5.61612380814051,
+        "std_return": 9.872938152252015,
+        "mean_length": 87.0
+      },
+      "1017": {
+        "mean_return": 17.280233204364777,
+        "std_return": 13.881546266737617,
+        "mean_length": 83.66666666666667
+      },
+      "1018": {
+        "mean_return": -1.6288854183779524,
+        "std_return": 8.480938513397255,
+        "mean_length": 41.666666666666664
+      },
+      "1019": {
+        "mean_return": 17.1781585313535,
+        "std_return": 11.370846104513914,
+        "mean_length": 89.0
+      },
+      "aggregate": {
+        "mean_return": 6.032379308177044,
+        "std_return": 12.460336125479362,
+        "num_seeds": 20,
+        "num_episodes": 60,
+        "action_dist": "L_LEFT=14%  IDLE=10%  L_RIGHT=26%  FASTER=37%  SLOWER=12%"
+      }
+    },
+    {
+      "update": 900,
+      "total_steps": 3687552,
+      "1000": {
+        "mean_return": 6.925009119013946,
+        "std_return": 3.3562577441432744,
+        "mean_length": 60.0
+      },
+      "1001": {
+        "mean_return": 5.92218036937993,
+        "std_return": 6.603729829079853,
+        "mean_length": 59.666666666666664
+      },
+      "1002": {
+        "mean_return": -0.8622326056162516,
+        "std_return": 3.056224849839622,
+        "mean_length": 32.666666666666664
+      },
+      "1003": {
+        "mean_return": 20.517852634734783,
+        "std_return": 14.2838508498523,
+        "mean_length": 92.33333333333333
+      },
+      "1004": {
+        "mean_return": -1.1056728387872379,
+        "std_return": 2.6053609845326515,
+        "mean_length": 34.666666666666664
+      },
+      "1005": {
+        "mean_return": 8.09380031004548,
+        "std_return": 7.318254949389773,
+        "mean_length": 65.66666666666667
+      },
+      "1006": {
+        "mean_return": 16.774506941995735,
+        "std_return": 9.900512890305034,
+        "mean_length": 120.0
+      },
+      "1007": {
+        "mean_return": -1.7202924986680348,
+        "std_return": 0.5497085525871086,
+        "mean_length": 28.666666666666668
+      },
+      "1008": {
+        "mean_return": -2.1344796532497035,
+        "std_return": 2.400139451421769,
+        "mean_length": 44.666666666666664
+      },
+      "1009": {
+        "mean_return": 9.677922566731771,
+        "std_return": 18.249420430116242,
+        "mean_length": 56.0
+      },
+      "1010": {
+        "mean_return": 25.168107157930137,
+        "std_return": 2.802818693076821,
+        "mean_length": 120.0
+      },
+      "1011": {
+        "mean_return": 16.148280198375385,
+        "std_return": 13.136359217761315,
+        "mean_length": 79.33333333333333
+      },
+      "1012": {
+        "mean_return": 12.482161772747835,
+        "std_return": 15.60867875656251,
+        "mean_length": 68.66666666666667
+      },
+      "1013": {
+        "mean_return": 12.805946820197589,
+        "std_return": 15.008270804806191,
+        "mean_length": 85.33333333333333
+      },
+      "1014": {
+        "mean_return": 9.039146321515242,
+        "std_return": 18.153781366061988,
+        "mean_length": 55.0
+      },
+      "1015": {
+        "mean_return": 8.08124074836572,
+        "std_return": 19.520471601161827,
+        "mean_length": 52.333333333333336
+      },
+      "1016": {
+        "mean_return": 2.392893947905179,
+        "std_return": 9.908953028896129,
+        "mean_length": 61.666666666666664
+      },
+      "1017": {
+        "mean_return": 12.5878552471598,
+        "std_return": 17.822948670295187,
+        "mean_length": 67.0
+      },
+      "1018": {
+        "mean_return": -7.803383959185642,
+        "std_return": 0.5728563514749818,
+        "mean_length": 17.333333333333332
+      },
+      "1019": {
+        "mean_return": 25.959942322088228,
+        "std_return": 4.391226664247978,
+        "mean_length": 120.0
+      },
+      "aggregate": {
+        "mean_return": 8.947539246133994,
+        "std_return": 14.44637422826061,
+        "num_seeds": 20,
+        "num_episodes": 60,
+        "action_dist": "L_LEFT=16%  IDLE=16%  L_RIGHT=25%  FASTER=32%  SLOWER=11%"
       }
     }
   ]

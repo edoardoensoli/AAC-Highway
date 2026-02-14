@@ -47,15 +47,13 @@ LANE_DEPENDENT_RANGES = {
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Shared observation / action / reward  (same across all levels)
-# ─────────────────────────────────────────────────────────────────────────────
+# Shared observation / action / reward (same across all levels)
 DURATION = 60
 POLICY_FREQUENCY = 2
 
 OBSERVATION_CFG = {
     "type": "Kinematics",
-    "vehicles_count": 7,               # ego + 6 nearest vehicles
+    "vehicles_count": 7,
     "features": ["presence", "x", "y", "vx", "vy", "cos_h", "sin_h"],
     "features_range": {
         "x": [-100, 100],
@@ -63,14 +61,13 @@ OBSERVATION_CFG = {
         "vx": [-20, 20],
         "vy": [-20, 20],
     },
-    "absolute": False,                 # relative to ego
-    "order": "sorted",                 # closest vehicles first
-    "normalize": True,                 # scale features to ~[-1, 1]
+    "absolute": False,
+    "order": "sorted",
+    "normalize": True,
     "clip": True,
-    "see_behind": True,                # observe vehicles behind ego too
+    "see_behind": True,
     "observe_intentions": False,
 }
-# Obs shape: (vehicles_count, num_features) = (7, 7) → flat = 49
 
 ACTION_CFG = {"type": "DiscreteMetaAction"}
 
@@ -84,9 +81,8 @@ REWARD_CFG = {
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Seed → Factor mapping  (lane-dependent correlated sampling)
-# ─────────────────────────────────────────────────────────────────────────────
 def seed_to_factors(seed: int) -> Dict:
     """
     Deterministically map an integer seed to highway env factors.
@@ -146,16 +142,13 @@ def describe_level(seed: int) -> str:
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Disjoint seed sets:  Λ_train  and  Λ_test
-# ─────────────────────────────────────────────────────────────────────────────
+# Disjoint seed sets for train and test
 TRAIN_SEEDS = list(range(0, 50))
 TEST_SEEDS  = list(range(1000, 1020))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Gymnasium Wrapper — applies POLITENESS to NPC vehicles
-# ─────────────────────────────────────────────────────────────────────────────
 _META_KEYS = frozenset({"env_id", "_politeness", "_seed"})
 
 
@@ -221,9 +214,7 @@ class HighwayLevelWrapper(gym.Wrapper):
         self._needs_reset = True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Quick-print when run directly
-# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("Lane-dependent factor ranges:")
     for lanes, r in sorted(LANE_DEPENDENT_RANGES.items()):

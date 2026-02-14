@@ -68,7 +68,7 @@ def load_model(checkpoint_path: str, device: str = "cpu") -> SB3_DQN:
 def evaluate_seeds(
     model: SB3_DQN,
     seeds: list[int],
-    num_episodes: int = 5,
+    num_episodes: int = 2,
     device: str = "cpu",
     render: bool = False,
     verbose: bool = True,
