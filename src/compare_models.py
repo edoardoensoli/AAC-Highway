@@ -32,19 +32,26 @@ MODEL_REGISTRY = {
     },
     'ppo': {
         'class': PPO,
-        'path': 'highway_ppo/model.zip',
+        'path': 'highway_ppo/v1/model_1000k.zip',
         'name': 'PPO',
         'color': 'green'
+    },
+    'dqn_plr': {
+        'class': DQN,
+        'path': '../plr_dqn/plr/runs/dqn_v2/model_final.pt',
+        'name': 'DQN_PLR',
+        'color': 'green'
     }
+    
 }
 
 # Configurazione environment standard
 ENV_CONFIG = {
-    "lanes_count": 4,
-    "vehicles_count": 25,
-    "vehicles_density": 1.4,
-    "duration": 60,
-    "simulation_frequency": 60,
+     "lanes_count": 3,
+    "vehicles_count": 15,
+    "vehicles_density": 0.8,
+    "duration": 60,                    # 60 secondi per episodio
+    "simulation_frequency": 30,
     "other_vehicles_type": "aggressive_vehicle.AggressiveIDMVehicle",
 }
 

@@ -13,6 +13,9 @@ dependencies = [
     "scipy==1.17.0",
 ]
 
+[tool.setuptools.packages.find]
+include = ["plr*", "src*"]
+
 [build-system]
 requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
