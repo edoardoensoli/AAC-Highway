@@ -1,0 +1,130 @@
+{
+  "model_name": "dqn_accel",
+  "model_path": "highway_dqn_accel/dqn_accel_final_1M.zip",
+  "timestamp": "2026-02-14T22:18:03.073180",
+  "n_episodes_per_scenario": 100,
+  "seed": 42,
+  "device": "cpu",
+  "scenarios": {
+    "Easy": {
+      "description": "Stage 0 - 2 lanes, light traffic",
+      "environment": {
+        "lanes_count": 2,
+        "vehicles_count": 8,
+        "vehicles_density": 0.8,
+        "duration": 30,
+        "initial_spacing": 2.0,
+        "collision_reward": -10.0,
+        "high_speed_reward": 0.3,
+        "other_vehicles_type": "IDMVehicle"
+      },
+      "results": {
+        "collision_rate": 17.0,
+        "survival_rate": 83.0,
+        "cars_overtaken": 4.15,
+        "avg_episode_length": 54.9,
+        "distance_traveled": 625.3,
+        "avg_reward": 12.32,
+        "avg_speed": 28.58,
+        "lane_changes": 6.41,
+        "eval_time_seconds": 60.53
+      }
+    },
+    "Baseline": {
+      "description": "Stage 2 - 3 lanes, moderate traffic",
+      "environment": {
+        "lanes_count": 3,
+        "vehicles_count": 12,
+        "vehicles_density": 0.8,
+        "duration": 40,
+        "initial_spacing": null,
+        "collision_reward": -10.0,
+        "high_speed_reward": 0.3,
+        "other_vehicles_type": "IDMVehicle"
+      },
+      "results": {
+        "collision_rate": 13.0,
+        "survival_rate": 87.0,
+        "cars_overtaken": 7.69,
+        "avg_episode_length": 75.8,
+        "distance_traveled": 897.3,
+        "avg_reward": 20.62,
+        "avg_speed": 29.72,
+        "lane_changes": 8.14,
+        "eval_time_seconds": 95.98
+      }
+    },
+    "Medium": {
+      "description": "Stage 2 - 3 lanes, moderate traffic",
+      "environment": {
+        "lanes_count": 3,
+        "vehicles_count": 15,
+        "vehicles_density": 1,
+        "duration": 40,
+        "initial_spacing": 2.0,
+        "collision_reward": -10.0,
+        "high_speed_reward": 0.3,
+        "other_vehicles_type": "IDMVehicle"
+      },
+      "results": {
+        "collision_rate": 33.0,
+        "survival_rate": 67.0,
+        "cars_overtaken": 9.01,
+        "avg_episode_length": 67.8,
+        "distance_traveled": 798.4,
+        "avg_reward": 16.01,
+        "avg_speed": 29.6,
+        "lane_changes": 8.41,
+        "eval_time_seconds": 97.35
+      }
+    },
+    "Hard": {
+      "description": "Stage 4 - 3 lanes, dense traffic, long duration",
+      "environment": {
+        "lanes_count": 3,
+        "vehicles_count": 20,
+        "vehicles_density": 1.2,
+        "duration": 50,
+        "initial_spacing": 1.5,
+        "collision_reward": -10.0,
+        "high_speed_reward": 0.3,
+        "other_vehicles_type": "IDMVehicle"
+      },
+      "results": {
+        "collision_rate": 69.0,
+        "survival_rate": 31.0,
+        "cars_overtaken": 9.48,
+        "avg_episode_length": 56.2,
+        "distance_traveled": 661.7,
+        "avg_reward": 9.06,
+        "avg_speed": 29.59,
+        "lane_changes": 8.32,
+        "eval_time_seconds": 100.49
+      }
+    },
+    "Expert": {
+      "description": "Stage 6 - 4 lanes, dense, aggressive",
+      "environment": {
+        "lanes_count": 4,
+        "vehicles_count": 30,
+        "vehicles_density": 1.5,
+        "duration": 60,
+        "initial_spacing": 1.5,
+        "collision_reward": -10.0,
+        "high_speed_reward": 0.3,
+        "other_vehicles_type": "AggressiveVehicle"
+      },
+      "results": {
+        "collision_rate": 97.0,
+        "survival_rate": 3.0,
+        "cars_overtaken": 6.51,
+        "avg_episode_length": 25.0,
+        "distance_traveled": 286.9,
+        "avg_reward": -3.17,
+        "avg_speed": 28.88,
+        "lane_changes": 4.54,
+        "eval_time_seconds": 80.88
+      }
+    }
+  }
+}

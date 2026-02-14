@@ -450,7 +450,65 @@ def evaluate(
         
         done = truncated = False
         while not (done or truncated):
-            action, _ = model.predict(obs, deterministic=True)
+            # Normalize obs to numpy array when possible
+            try:
+                obs_arr = np.asarray(obs)
+            except Exception:
+                obs_arr = obs
+
+            target_shape = None
+            if hasattr(model, 'policy') and hasattr(model.policy, 'observation_space'):
+                target_shape = model.policy.observation_space.shape
+
+            obs_for_model = obs_arr
+
+            # If model defines an expected shape, try to match it by flattening,
+            # padding with zeros, or truncating as needed.
+            if target_shape and isinstance(target_shape, tuple):
+                # Target is flattened vector (e.g. (49,))
+                if len(target_shape) == 1:
+                    target_len = int(target_shape[0])
+                    # Ensure we have a 1-D array
+                    try:
+                        cur_flat = obs_arr.flatten() if hasattr(obs_arr, 'flatten') else np.ravel(obs_arr)
+                    except Exception:
+                        cur_flat = np.array(obs_arr)
+
+                    cur_len = cur_flat.shape[0]
+                    if cur_len < target_len:
+                        pad = np.zeros(target_len - cur_len, dtype=cur_flat.dtype)
+                        obs_for_model = np.concatenate([cur_flat, pad])
+                    else:
+                        obs_for_model = cur_flat[:target_len]
+
+                # Target is 2-D matrix (e.g. (7,7))
+                elif len(target_shape) == 2:
+                    tgt_r, tgt_c = int(target_shape[0]), int(target_shape[1])
+                    tgt_len = tgt_r * tgt_c
+
+                    # If env returned 1-D, reshape/pad/truncate into matrix
+                    if hasattr(obs_arr, 'ndim') and obs_arr.ndim == 1:
+                        cur_flat = obs_arr
+                        cur_len = cur_flat.shape[0]
+                        if cur_len < tgt_len:
+                            pad = np.zeros(tgt_len - cur_len, dtype=cur_flat.dtype)
+                            flat2 = np.concatenate([cur_flat, pad])
+                        else:
+                            flat2 = cur_flat[:tgt_len]
+                        obs_for_model = flat2.reshape((tgt_r, tgt_c))
+                    else:
+                        # obs_arr is 2-D or higher: flatten then reshape to target
+                        cur_flat = obs_arr.flatten()
+                        cur_len = cur_flat.shape[0]
+                        if cur_len < tgt_len:
+                            pad = np.zeros(tgt_len - cur_len, dtype=cur_flat.dtype)
+                            flat2 = np.concatenate([cur_flat, pad])
+                        else:
+                            flat2 = cur_flat[:tgt_len]
+                        obs_for_model = flat2.reshape((tgt_r, tgt_c))
+
+            # Final call to model.predict
+            action, _ = model.predict(obs_for_model, deterministic=True)
             obs, reward, done, truncated, info = env.step(action)
             tracker.step(env, action, reward, done, truncated, info)
             
@@ -634,10 +692,20 @@ def compare_models(
         
         # Detect observation shape and features for PPO
         obs_cfg_update = None
-        if algo == 'PPO':
+        if algo == 'PPO' or algo == 'DQN_PLR':
             obs_space = model.policy.observation_space
             if hasattr(obs_space, 'shape'):
                 shape = obs_space.shape
+
+                # Handle flattened observation shapes (e.g. (49,)) produced by some policies
+                if isinstance(shape, tuple) and len(shape) == 1 and shape[0] == 49:
+                    # Interpret flattened 49 as 7x7 (vehicles x features)
+                    shape = (7, 7)
+
+                # If shape is still 1-D but not 49, fallback to 7x5
+                if isinstance(shape, tuple) and len(shape) == 1:
+                    shape = (7, 5)
+
                 vehicles_count = shape[0]
                 features_count = shape[1]
                 

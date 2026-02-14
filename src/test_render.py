@@ -38,6 +38,16 @@ def _detect_obs_config(model) -> dict:
         }
     
     shape = obs_space.shape
+
+    # Handle flattened observation shapes (e.g. (49,)) produced by some policies
+    if isinstance(shape, tuple) and len(shape) == 1 and shape[0] == 49:
+        # Interpret flattened 49 as 7x7 (vehicles x features)
+        shape = (7, 7)
+
+    # If shape is still 1-D but not 49, fallback to 7x5
+    if isinstance(shape, tuple) and len(shape) == 1:
+        shape = (7, 5)
+
     vehicles_count = shape[0]
     features_count = shape[1]
     
@@ -171,7 +181,26 @@ def test_model_with_render(
             ep_distances = []
             
             while not done:
-                action, _ = model.predict(obs, deterministic=True)
+                # Ensure observation shape matches model's expected observation_space
+                try:
+                    obs_arr = np.asarray(obs)
+                except Exception:
+                    obs_arr = obs
+
+                target_shape = None
+                if hasattr(model, 'policy') and hasattr(model.policy, 'observation_space'):
+                    target_shape = model.policy.observation_space.shape
+
+                # If model expects flattened obs (e.g. (49,)) but env returns (7,7), flatten it
+                if target_shape and isinstance(target_shape, tuple) and len(target_shape) == 1:
+                    if hasattr(obs_arr, 'ndim') and obs_arr.ndim > 1:
+                        obs_for_model = obs_arr.flatten()
+                    else:
+                        obs_for_model = obs_arr
+                else:
+                    obs_for_model = obs_arr
+
+                action, _ = model.predict(obs_for_model, deterministic=True)
                 obs, reward, terminated, truncated, info = env.step(action)
                 done = terminated or truncated
                 ep_return += reward

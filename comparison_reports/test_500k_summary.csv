@@ -1,0 +1,6 @@
+scenario,dqn_accel_survival,dqn_baseline_survival,dqn_plr_survival,ppo_survival,dqn_accel_avg_reward,dqn_baseline_avg_reward,dqn_plr_avg_reward,ppo_avg_reward
+Baseline,75.0,68.0,0.0,81.0,17.96,17.61,-3.44,10.13
+Easy,60.0,28.0,1.0,36.0,9.54,4.03,-5.19,0.23
+Expert,4.0,0.0,0.0,29.0,-3.84,-5.79,-7.79,-4.02
+Hard,25.0,22.0,0.0,28.0,5.72,5.27,-6.51,-2.67
+Medium,51.0,52.0,0.0,62.0,12.28,12.83,-5.13,3.2

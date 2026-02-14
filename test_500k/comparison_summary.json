@@ -1,0 +1,142 @@
+{
+  "timestamp": "2026-02-14T21:57:21.946723",
+  "models": [
+    "dqn_plr",
+    "dqn_baseline",
+    "dqn_accel",
+    "ppo"
+  ],
+  "n_episodes_per_scenario": 100,
+  "results": {
+    "Easy": {
+      "dqn_plr": {
+        "survival_rate": 1.0,
+        "avg_reward": -5.19,
+        "cars_overtaken": 0.83,
+        "distance_traveled": 204.5
+      },
+      "dqn_baseline": {
+        "survival_rate": 28.0,
+        "avg_reward": 4.03,
+        "cars_overtaken": 3.21,
+        "distance_traveled": 467.3
+      },
+      "dqn_accel": {
+        "survival_rate": 60.0,
+        "avg_reward": 9.54,
+        "cars_overtaken": 4.2,
+        "distance_traveled": 589.8
+      },
+      "ppo": {
+        "survival_rate": 36.0,
+        "avg_reward": 0.23,
+        "cars_overtaken": 1.65,
+        "distance_traveled": 390.8
+      }
+    },
+    "Baseline": {
+      "dqn_plr": {
+        "survival_rate": 0.0,
+        "avg_reward": -3.44,
+        "cars_overtaken": 1.82,
+        "distance_traveled": 268.0
+      },
+      "dqn_baseline": {
+        "survival_rate": 68.0,
+        "avg_reward": 17.61,
+        "cars_overtaken": 7.24,
+        "distance_traveled": 841.8
+      },
+      "dqn_accel": {
+        "survival_rate": 75.0,
+        "avg_reward": 17.96,
+        "cars_overtaken": 7.22,
+        "distance_traveled": 844.9
+      },
+      "ppo": {
+        "survival_rate": 81.0,
+        "avg_reward": 10.13,
+        "cars_overtaken": 3.65,
+        "distance_traveled": 730.7
+      }
+    },
+    "Medium": {
+      "dqn_plr": {
+        "survival_rate": 0.0,
+        "avg_reward": -5.13,
+        "cars_overtaken": 1.79,
+        "distance_traveled": 200.1
+      },
+      "dqn_baseline": {
+        "survival_rate": 52.0,
+        "avg_reward": 12.83,
+        "cars_overtaken": 8.22,
+        "distance_traveled": 715.3
+      },
+      "dqn_accel": {
+        "survival_rate": 51.0,
+        "avg_reward": 12.28,
+        "cars_overtaken": 8.03,
+        "distance_traveled": 718.3
+      },
+      "ppo": {
+        "survival_rate": 62.0,
+        "avg_reward": 3.2,
+        "cars_overtaken": 2.85,
+        "distance_traveled": 570.8
+      }
+    },
+    "Hard": {
+      "dqn_plr": {
+        "survival_rate": 0.0,
+        "avg_reward": -6.51,
+        "cars_overtaken": 1.61,
+        "distance_traveled": 144.9
+      },
+      "dqn_baseline": {
+        "survival_rate": 22.0,
+        "avg_reward": 5.27,
+        "cars_overtaken": 7.68,
+        "distance_traveled": 532.5
+      },
+      "dqn_accel": {
+        "survival_rate": 25.0,
+        "avg_reward": 5.72,
+        "cars_overtaken": 8.06,
+        "distance_traveled": 576.4
+      },
+      "ppo": {
+        "survival_rate": 28.0,
+        "avg_reward": -2.67,
+        "cars_overtaken": 2.82,
+        "distance_traveled": 468.0
+      }
+    },
+    "Expert": {
+      "dqn_plr": {
+        "survival_rate": 0.0,
+        "avg_reward": -7.79,
+        "cars_overtaken": 1.63,
+        "distance_traveled": 93.9
+      },
+      "dqn_baseline": {
+        "survival_rate": 0.0,
+        "avg_reward": -5.79,
+        "cars_overtaken": 4.4,
+        "distance_traveled": 190.1
+      },
+      "dqn_accel": {
+        "survival_rate": 4.0,
+        "avg_reward": -3.84,
+        "cars_overtaken": 5.65,
+        "distance_traveled": 264.2
+      },
+      "ppo": {
+        "survival_rate": 29.0,
+        "avg_reward": -4.02,
+        "cars_overtaken": 3.3,
+        "distance_traveled": 405.7
+      }
+    }
+  }
+}
