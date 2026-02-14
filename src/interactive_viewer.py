@@ -28,15 +28,34 @@ from stable_baselines3 import DQN, PPO
 MODEL_REGISTRY = {
     "dqn_baseline": ("highway_dqn/dqn_baseline_1M.zip", DQN),
     "dqn_accel":    ("highway_dqn_accel/dqn_accel_final_1M.zip", DQN),
-    "ppo_baseline": ("models/ppo_baseline.zip", PPO),
-    "dqn_plr":      ("models/dqn_plr.zip", DQN),
+    "ppo_baseline": ("highway_ppo/ppo_baseline_1M.zip", PPO),
 }
 
-# Observation config matching the trained models (shape 7x5)
-OBS_CFG = {
+# Observation configs (7x5 for new models, 5x5 fallback for old PPO)
+OBS_CFG_7 = {
     "type": "Kinematics",
     "vehicles_count": 7,
     "features": ["presence", "x", "y", "vx", "vy"],
+    "features_range": {"x": [-100, 100], "y": [-100, 100],
+                       "vx": [-20, 20], "vy": [-20, 20]},
+    "absolute": False, "normalize": True,
+    "see_behind": True, "order": "sorted",
+}
+
+OBS_CFG_5 = {
+    "type": "Kinematics",
+    "vehicles_count": 5,
+    "features": ["presence", "x", "y", "vx", "vy"],
+    "features_range": {"x": [-100, 100], "y": [-100, 100],
+                       "vx": [-20, 20], "vy": [-20, 20]},
+    "absolute": False, "normalize": True,
+    "see_behind": True, "order": "sorted",
+}
+
+OBS_CFG_7x7 = {
+    "type": "Kinematics",
+    "vehicles_count": 7,
+    "features": ["presence", "x", "y", "vx", "vy", "cos_h", "sin_h"],
     "features_range": {"x": [-100, 100], "y": [-100, 100],
                        "vx": [-20, 20], "vy": [-20, 20]},
     "absolute": False, "normalize": True,
@@ -174,7 +193,23 @@ def main():
     print(f"Available models: {available}")
 
     cur_model_name = available[0]
-    model = DQN.load(MODEL_REGISTRY[cur_model_name][0], device=device)
+    path, cls = MODEL_REGISTRY[cur_model_name]
+    model = cls.load(path, device=device)
+    
+    # Detect observation shape needed
+    obs_cfg = OBS_CFG_7
+    if cls == PPO:
+        obs_space = model.policy.observation_space
+        if hasattr(obs_space, 'shape'):
+            shape = obs_space.shape
+            if shape == (5, 5):
+                print(f"  PPO model: 5x5 observations (old training)")
+                obs_cfg = OBS_CFG_5
+            elif shape == (7, 7):
+                print(f"  PPO model: 7x7 observations (with heading features)")
+                obs_cfg = OBS_CFG_7x7
+            else:
+                print(f"  PPO model: {shape[0]}x{shape[1]} observations")
 
     # ---- Pygame ----
     pygame.init()
@@ -206,7 +241,7 @@ def main():
         "collision_reward": -10.0, "high_speed_reward": 0.3,
         "right_lane_reward": 0.0, "lane_change_reward": 0.0,
         "reward_speed_range": [20, 30], "normalize_reward": False,
-        "observation": OBS_CFG,
+        "observation": obs_cfg,
         "render_agent": True, "offscreen_rendering": True,
     }
     env = gymnasium.make("highway-v0", config=base_cfg, render_mode="rgb_array")
@@ -268,6 +303,24 @@ def main():
             cur_model_name = rg_model.selected
             path, cls = MODEL_REGISTRY[cur_model_name]
             model = cls.load(path, device=device)
+            
+            # Re-detect observation shape for this model
+            new_obs_cfg = OBS_CFG_7
+            if cls == PPO:
+                obs_space = model.policy.observation_space
+                if hasattr(obs_space, 'shape'):
+                    shape = obs_space.shape
+                    if shape == (5, 5):
+                        print(f"  PPO model: 5x5 observations")
+                        new_obs_cfg = OBS_CFG_5
+                    elif shape == (7, 7):
+                        print(f"  PPO model: 7x7 observations")
+                        new_obs_cfg = OBS_CFG_7x7
+            
+            if new_obs_cfg != obs_cfg:
+                obs_cfg = new_obs_cfg
+                env.unwrapped.config.update({"observation": obs_cfg})
+            
             print(f"Switched to: {cur_model_name}")
             cfg_changed = True
 

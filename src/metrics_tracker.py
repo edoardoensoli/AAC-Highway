@@ -581,7 +581,7 @@ def compare_models(
     import time
 
     try:
-        from stable_baselines3 import DQN
+        from stable_baselines3 import DQN, PPO
     except ImportError:
         raise ImportError("stable_baselines3 not installed. Install with: pip install stable-baselines3")
 
@@ -618,12 +618,54 @@ def compare_models(
         print(f"  Path:    {model_path}")
         print(f"{'#'*65}")
 
-        model = DQN.load(model_path, device=device)
+        # Auto-detect algorithm (DQN or PPO)
+        for _cls in (DQN, PPO):
+            try:
+                model = _cls.load(model_path, device=device)
+                break
+            except Exception:
+                continue
+        else:
+            print(f"  Could not load model (tried DQN and PPO): {model_path}")
+            continue
+        
+        algo = type(model).__name__
+        print(f"  Algorithm: {algo}")
+        
+        # Detect observation shape and features for PPO
+        obs_cfg_update = None
+        if algo == 'PPO':
+            obs_space = model.policy.observation_space
+            if hasattr(obs_space, 'shape'):
+                shape = obs_space.shape
+                vehicles_count = shape[0]
+                features_count = shape[1]
+                
+                if features_count == 7:
+                    print(f"  Using {vehicles_count}x7 observations (with heading features)")
+                    features = ["presence", "x", "y", "vx", "vy", "cos_h", "sin_h"]
+                elif features_count == 5:
+                    print(f"  Using {vehicles_count}x5 observations")
+                    features = ["presence", "x", "y", "vx", "vy"]
+                else:
+                    print(f"  Using {vehicles_count}x{features_count} observations")
+                    features = ["presence", "x", "y", "vx", "vy"]
+                
+                obs_cfg_update = {
+                    "vehicles_count": vehicles_count,
+                    "features": features,
+                }
+        
         model_results: Dict[str, Dict] = {}
 
         for sc in scenarios:
             sc_name = sc['name']
-            sc_config = sc['config']
+            sc_config = sc['config'].copy()
+            
+            # Adapt observation config if model needs different shape
+            if obs_cfg_update and 'observation' in sc_config:
+                sc_config['observation'] = sc_config['observation'].copy()
+                sc_config['observation'].update(obs_cfg_update)
 
             print(f"\n  {'='*55}")
             print(f"  Scenario: {sc_name} — {sc.get('description', '')}")

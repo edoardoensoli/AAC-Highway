@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Test DQN models on highway-env with visual rendering.
+Test DQN/PPO models on highway-env with visual rendering.
 Displays agent behavior across different difficulty levels and tracks proximity metrics.
 """
 
@@ -8,8 +8,58 @@ import gymnasium
 import numpy as np
 from pathlib import Path
 import json
-from stable_baselines3 import DQN
-from src.dqn_accel import ACCELGenerator
+from stable_baselines3 import DQN, PPO
+from dqn_accel import ACCELGenerator
+
+
+def _load_model(model_path: str, device: str = 'cpu'):
+    """Load a model, auto-detecting whether it is DQN or PPO."""
+    for cls in (DQN, PPO):
+        try:
+            return cls.load(model_path, device=device)
+        except Exception:
+            continue
+    raise ValueError(f"Could not load model (tried DQN and PPO): {model_path}")
+
+
+def _detect_obs_config(model) -> dict:
+    """Detect observation config from model's observation space."""
+    obs_space = model.policy.observation_space
+    if not hasattr(obs_space, 'shape'):
+        # Default to 7x5 if shape not available
+        return {
+            "type": "Kinematics",
+            "vehicles_count": 7,
+            "features": ["presence", "x", "y", "vx", "vy"],
+            "features_range": {"x": [-100, 100], "y": [-100, 100],
+                               "vx": [-20, 20], "vy": [-20, 20]},
+            "absolute": False, "normalize": True,
+            "see_behind": True, "order": "sorted",
+        }
+    
+    shape = obs_space.shape
+    vehicles_count = shape[0]
+    features_count = shape[1]
+    
+    # Map features_count to feature list
+    if features_count == 5:
+        features = ["presence", "x", "y", "vx", "vy"]
+    elif features_count == 7:
+        # Default highway-env features
+        features = ["presence", "x", "y", "vx", "vy", "cos_h", "sin_h"]
+    else:
+        # Fallback
+        features = ["presence", "x", "y", "vx", "vy"]
+    
+    return {
+        "type": "Kinematics",
+        "vehicles_count": vehicles_count,
+        "features": features,
+        "features_range": {"x": [-100, 100], "y": [-100, 100],
+                           "vx": [-20, 20], "vy": [-20, 20]},
+        "absolute": False, "normalize": True,
+        "see_behind": True, "order": "sorted",
+    }
 
 def _compute_min_distance(env):
     """Compute minimum distance from ego vehicle to nearby vehicles (front/side)."""
@@ -57,8 +107,10 @@ def test_model_with_render(
         print(f"Model not found: {model_path}")
         return
     
-    model = DQN.load(model_path, device=device)
-    print(f"Model loaded from: {model_path}")
+    model = _load_model(model_path, device=device)
+    algo = type(model).__name__
+    obs_cfg = _detect_obs_config(model)
+    print(f"Model loaded from: {model_path} ({algo}, {obs_cfg['vehicles_count']}x{len(obs_cfg['features'])} obs)")
     
     configs = {
         'easy': {
@@ -89,8 +141,10 @@ def test_model_with_render(
         return
     
     cfg_info = configs[difficulty]
+    fixed_params = ACCELGenerator.FIXED_PARAMS.copy()
+    fixed_params["observation"] = obs_cfg
     config = {
-        **ACCELGenerator.FIXED_PARAMS,
+        **fixed_params,
         **{k: v for k, v in cfg_info.items() if k != 'name'}
     }
     
@@ -183,17 +237,17 @@ if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='Test DQN model with rendering',
+        description='Test DQN/PPO model with rendering',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python test_render.py --model ./highway_dqn_accel/dqn_accel_final_1M.zip --difficulty easy
-  python test_render.py --model ./highway_dqn_accel/dqn_accel_final_1M.zip --difficulty expert --episodes 10
-  python test_render.py --model ./highway_dqn_accel/dqn_accel_final_1M.zip --all-difficulties
+  python src/test_render.py --model ./highway_dqn_accel/dqn_accel_final_1M.zip --difficulty easy
+  python src/test_render.py --model ./highway_ppo/ppo_baseline_1M.zip --difficulty medium
+  python src/test_render.py --model ./highway_dqn/dqn_baseline_1M.zip --all-difficulties
         """
     )
     parser.add_argument('--model', type=str, required=True,
-                        help='Path to DQN model (.zip)')
+                        help='Path to model (.zip), supports DQN and PPO')
     parser.add_argument('--difficulty', type=str, default='easy',
                         choices=['easy', 'medium', 'hard', 'expert'],
                         help='Difficulty level (default: easy)')
