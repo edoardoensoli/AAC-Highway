@@ -1,377 +1,158 @@
-# Curriculum Learning for Highway-Env: Implementation Guide
+# AAC-Highway
 
-This repository contains implementations of three curriculum learning approaches for training robust RL agents in highway-env:
+DQN agents for autonomous highway driving using [highway-env](https://github.com/Farama-Foundation/HighwayEnv).
+Two training approaches are compared:
 
-1. **Baseline** - Single fixed environment
-2. **Domain Randomization (DR)** - Random environment sampling
-3. **Prioritized Level Replay (PLR)** - Intelligent curriculum learning
+- **DQN Baseline** -- standard DQN on a fixed environment configuration.
+- **DQN + ACCEL** -- DQN with curriculum learning (ACCEL: Evolving Curricula with Regret-Based Environment Design, Parker-Holder et al. 2022). The agent progresses through 7 difficulty stages, from easy traffic to dense aggressive scenarios.
 
-## 📚 Academic Background
+Both models share the same reward function, observation space (Kinematics 7x5), and network architecture, so results are directly comparable.
 
-### Key Papers
-
-**Domain Randomization:**
-- Tobin et al. (2017) - "Domain Randomization for Transferring Deep Neural Networks from Simulation to the Real World"
-  - arXiv: https://arxiv.org/abs/1703.06907
-  
-**Prioritized Level Replay:**
-- Jiang et al. (2021) - "Prioritized Level Replay"
-  - arXiv: https://arxiv.org/abs/2010.03934
-  - Code: https://github.com/facebookresearch/level-replay
-  
-**ACCEL (Advanced):**
-- Parker-Holder et al. (2022) - "Evolving Curricula with Regret-Based Environment Design"
-  - arXiv: https://arxiv.org/abs/2203.01302
-  - Website: https://accelagent.github.io/
-
-See `curriculum_learning_guide.md` for comprehensive theoretical background and implementation details.
-
-## 🚀 Quick Start
-
-### Installation
+## Setup
 
 ```bash
-# Install dependencies
-pip install gymnasium highway-env stable-baselines3 torch tqdm
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # Linux/Mac
 
-# Install highway-env if not already installed
-pip install highway-env
+pip install -r requirements.txt
 ```
 
-### Basic Usage
+## Training
 
-#### 1. Train Baseline (Single Environment)
+### DQN Baseline
+
+Edit the constants at the top of `src/dqn_baseline.py` to configure training:
+
+
+| Variable          | Default     | Description                                            |
+| ----------------- | ----------- | ------------------------------------------------------ |
+| `TRAIN`           | `True`      | Set to`False` to skip training and run evaluation only |
+| `TOTAL_TIMESTEPS` | `1_000_000` | Total training steps                                   |
+| `NUM_ENVS`        | `4`         | Parallel environments (SubprocVecEnv)                  |
 
 ```bash
-python train_with_curriculum.py --method baseline --total-timesteps 100000
+python src/dqn_baseline.py
 ```
 
-#### 2. Train with Domain Randomization
+Models are saved to `highway_dqn/`.
+
+### DQN + ACCEL
 
 ```bash
-python train_with_curriculum.py --method dr --total-timesteps 100000
+python src/dqn_accel.py --timesteps 1000000
 ```
 
-#### 3. Train with PLR (Recommended)
+Key CLI arguments:
+
+
+| Argument              | Default              | Description                       |
+| --------------------- | -------------------- | --------------------------------- |
+| `--pretrained`        | None                 | Path to pre-trained model (.zip)  |
+| `--timesteps`         | 500000               | Total training steps              |
+| `--num-envs`          | 8                    | Parallel environments             |
+| `--mastery-threshold` | 0.80                 | Survival rate to advance stage    |
+| `--start-stage`       | 0                    | Starting curriculum stage (0-6)   |
+| `--lr`                | 5e-4                 | Learning rate                     |
+| `--batch-size`        | 64                   | Batch size                        |
+| `--gamma`             | 0.95                 | Discount factor                   |
+| `--save-dir`          | `./dqn_accel_models` | Output directory                  |
+| `--no-accel`          | --                   | Disable mutations (PLR only)      |
+| `--eval-only`         | None                 | Evaluate a model without training |
+| `--config`            | None                 | JSON config file (overrides CLI)  |
+
+Example with pre-trained baseline:
 
 ```bash
-python train_with_curriculum.py --method plr --total-timesteps 100000
+python src/dqn_accel.py --pretrained highway_dqn/dqn_baseline_1M.zip --timesteps 1000000
 ```
 
-### Command Line Options
-
-```
---method: baseline | dr | plr (default: plr)
---total-timesteps: Total training steps (default: 100000)
---log-dir: Directory for logs (default: highway_curriculum_logs)
---seed: Random seed (default: 42)
-```
-
-## 📊 Monitoring Training
-
-### TensorBoard
-
-All methods log to TensorBoard:
+Evaluate a trained model:
 
 ```bash
-tensorboard --logdir highway_curriculum_logs_<timestamp>
+python src/dqn_accel.py --eval-only highway_dqn_accel/dqn_accel_final_1M.zip
 ```
 
-Key metrics to watch:
-- `train/ep_rew_mean` - Training reward
-- `eval/mean_reward` - Test set generalization
-- `plr/num_seen_levels` - How many environments explored
-- `plr/avg_score` - Average difficulty of curriculum
+Models are saved to `highway_dqn_accel/`.
 
-### Expected Results
+## Evaluation
 
-After 100k steps:
-- **Baseline**: Good on training env, poor generalization
-- **DR**: Moderate performance, okay generalization
-- **PLR**: Best generalization to test environments
+### Single model (with rendering)
 
-## 🔧 Customization
-
-### Modify Environment Configurations
-
-Edit `plr_implementation.py`, function `_generate_default_configs()`:
-
-```python
-def _generate_default_configs(self):
-    configs = []
-    
-    # Add your custom parameter ranges
-    for lanes in [2, 3, 4, 5]:  # More lanes
-        for density in [0.5, 1.0, 1.5, 2.0, 2.5]:  # Wider density range
-            for vehicles in range(10, 50, 5):  # More vehicle counts
-                config = {
-                    'lanes_count': lanes,
-                    'vehicles_density': density,
-                    'vehicles_count': vehicles,
-                    'duration': 60,
-                    # Add more parameters
-                    'collision_reward': -5.0,
-                    'high_speed_reward': 0.4,
-                }
-                configs.append(config)
-    
-    return configs
+```bash
+python test_render.py --model highway_dqn_accel/dqn_accel_final_1M.zip --difficulty medium
+python test_render.py --model highway_dqn_accel/dqn_accel_final_1M.zip --all-difficulties
 ```
 
-### Tune PLR Hyperparameters
+Difficulties: `easy`, `medium`, `hard`, `expert`.
 
-In `train_with_curriculum.py`, modify the PLR initialization:
+### Interactive viewer (GUI)
 
-```python
-plr = PLRManager(
-    env_id="highway-v0",
-    train_env_configs=train_configs,
-    score_function='value_loss',  # or 'advantage', 'return'
-    replay_probability=0.8,  # 0.7-0.9, higher = more curriculum
-    temperature=0.1,  # 0.05-0.2, lower = more greedy
-    staleness_coef=0.1,  # 0.05-0.2, higher = more exploration
-    buffer_size=50,  # 50-200, number of levels to track
-)
+```bash
+python src/interactive_viewer.py
 ```
 
-### Change RL Algorithm
+Adjustable parameters via sliders and buttons: lanes, vehicles, density, FPS, vehicle aggressiveness, model selection. Controls: `SPACE` pause/resume, `ESC` quit.
 
-Replace DQN with PPO or other SB3 algorithms:
+### Model comparison
 
-```python
-from stable_baselines3 import PPO
+Compare any number of models across standardized scenarios:
 
-model = PPO(
-    'MlpPolicy',
-    env,
-    policy_kwargs=dict(net_arch=[256, 256]),
-    learning_rate=3e-4,
-    n_steps=2048,
-    batch_size=64,
-    gamma=0.99,
-    # ... other PPO params
-)
+```bash
+python src/metrics_tracker.py \
+    --dqn_baseline highway_dqn/dqn_baseline_1M.zip \
+    --dqn_accel highway_dqn_accel/dqn_accel_final_1M.zip \
+    --episodes 50 \
+    --output ./eval_results
 ```
 
-## 📈 Evaluation
+Arguments:
 
-### Test Generalization
 
-```python
-import gymnasium
-from stable_baselines3 import DQN
-import json
-import numpy as np
+| Argument         | Default | Description                        |
+| ---------------- | ------- | ---------------------------------- |
+| `--<model_name>` | --      | One or more`--name path.zip` pairs |
+| `--episodes`     | 10      | Episodes per scenario              |
+| `--seed`         | 42      | Random seed                        |
+| `--output`       | auto    | Output folder for JSON results     |
 
-# Load model
-model = DQN.load("highway_curriculum_logs_<timestamp>/plr/model")
+## Pre-trained models
 
-# Load test configs
-with open("highway_curriculum_logs_<timestamp>/plr/test_configs.json") as f:
-    test_configs = json.load(f)
+### highway_dqn/ (baseline)
 
-# Evaluate
-results = []
-for config in test_configs:
-    env = gymnasium.make("highway-v0", config=config)
-    
-    # Run 10 episodes
-    rewards = []
-    for _ in range(10):
-        obs, _ = env.reset()
-        done = truncated = False
-        episode_reward = 0
-        
-        while not (done or truncated):
-            action, _ = model.predict(obs, deterministic=True)
-            obs, reward, done, truncated, _ = env.step(action)
-            episode_reward += reward
-        
-        rewards.append(episode_reward)
-    
-    results.append({
-        'config': config,
-        'mean_reward': np.mean(rewards),
-        'std_reward': np.std(rewards),
-    })
 
-# Print results
-for i, r in enumerate(results):
-    print(f"Config {i}: {r['mean_reward']:.2f} +/- {r['std_reward']:.2f}")
-    print(f"  {r['config']}")
+| File                    | Steps |
+| ----------------------- | ----- |
+| `dqn_baseline_200k.zip` | 200k  |
+| `dqn_baseline_500k.zip` | 500k  |
+| `dqn_baseline_1M.zip`   | 1M    |
 
-print(f"\nOverall mean: {np.mean([r['mean_reward'] for r in results]):.2f}")
-```
+### highway_dqn_accel/ (ACCEL curriculum)
 
-### Visualize Learned Policy
 
-```python
-import gymnasium
-from stable_baselines3 import DQN
+| File                       | Steps |
+| -------------------------- | ----- |
+| `dqn_accel_final_200k.zip` | 200k  |
+| `dqn_accel_final_500k.zip` | 500k  |
+| `dqn_accel_final_1M.zip`   | 1M    |
 
-# Load model
-model = DQN.load("highway_curriculum_logs_<timestamp>/plr/model")
+Intermediate checkpoints are also available in each folder (`checkpoint_step*.zip`, `dqn_checkpoint_*_steps.zip`).
 
-# Create environment with rendering
-env = gymnasium.make(
-    "highway-v0",
-    config={'lanes_count': 4, 'vehicles_count': 30, 'vehicles_density': 1.5},
-    render_mode='human'
-)
-
-# Run episode
-obs, _ = env.reset()
-done = truncated = False
-
-while not (done or truncated):
-    action, _ = model.predict(obs, deterministic=True)
-    obs, reward, done, truncated, info = env.step(action)
-    env.render()
-
-env.close()
-```
-
-## 🎯 Next Steps: ACCEL Implementation
-
-After mastering PLR, implement ACCEL for even better generalization:
-
-### Key Components Needed:
-
-1. **Mutation Function**: Define how to mutate environments
-```python
-def mutate_config(config, mutation_rate=0.1):
-    new_config = copy.deepcopy(config)
-    
-    if np.random.random() < mutation_rate:
-        # Mutate lanes
-        new_config['lanes_count'] += np.random.choice([-1, 0, 1])
-        new_config['lanes_count'] = np.clip(new_config['lanes_count'], 2, 5)
-    
-    # ... more mutations
-    return new_config
-```
-
-2. **Regret Estimation**: Measure learning potential
-```python
-def estimate_regret(episode_data):
-    # High positive advantage = room for improvement
-    advantages = episode_data['advantages']
-    return np.mean(np.maximum(advantages, 0))
-```
-
-3. **Evolution Loop**: Sample → Mutate → Evaluate → Update
-
-See `curriculum_learning_guide.md` for full ACCEL implementation.
-
-## 📁 File Structure
+## Project structure
 
 ```
-.
-├── curriculum_learning_guide.md    # Comprehensive theory & implementation guide
-├── plr_implementation.py           # PLR core implementation
-├── train_with_curriculum.py        # Main training script
-├── README.md                        # This file
-│
-├── highway_curriculum_logs_<timestamp>/
-│   ├── baseline/
-│   │   └── model.zip
-│   ├── dr/
-│   │   └── model.zip
-│   └── plr/
-│       ├── model.zip
-│       ├── plr_state.pkl
-│       ├── train_configs.json
-│       └── test_configs.json
+src/
+    dqn_baseline.py          # Baseline DQN training
+    dqn_accel.py             # DQN + ACCEL curriculum training
+    metrics_tracker.py       # Model comparison across scenarios
+    aggressive_vehicle.py    # Custom aggressive IDM vehicle
+    interactive_viewer.py    # Interactive GUI viewer
+    test_render.py           # CLI model evaluation with rendering
+requirements.txt
 ```
 
-## 🐛 Troubleshooting
+## References
 
-### Issue: Training is slow
-- **Solution**: Reduce `total_timesteps` or use a smaller environment configuration set
-- **Solution**: Use GPU if available (automatically detected)
-
-### Issue: PLR not showing improvement over DR
-- **Solution**: Increase training time (PLR needs time to build curriculum)
-- **Solution**: Tune hyperparameters (see Customization section)
-- **Solution**: Ensure sufficient environment diversity
-
-### Issue: Agent not generalizing to test set
-- **Solution**: Increase environment diversity in training set
-- **Solution**: Make sure test set is truly held-out (not overlapping with train)
-- **Solution**: Try different `score_function` in PLR ('value_loss', 'advantage', 'return')
-
-### Issue: "CUDA out of memory"
-- **Solution**: Reduce `batch_size` in model configuration
-- **Solution**: Use CPU instead: model will automatically detect and use CPU if CUDA unavailable
-
-## 📖 Learning Resources
-
-### Video Tutorials
-- Yannic Kilcher's "ACCEL - Evolving Curricula with Regret-Based Environment Design" on YouTube
-- "Prioritized Level Replay" presentation at ICML 2021
-
-### Additional Papers
-- **Survey**: Narvekar et al. (2020) "Curriculum Learning for Reinforcement Learning Domains: A Framework and Survey"
-  - URL: https://jmlr.org/papers/volume21/20-212/20-212.pdf
-
-- **Sim2Real**: Understanding Domain Randomization (Xiong et al., ICLR 2022)
-  - URL: https://openreview.net/pdf?id=T8vZHIRTrY
-
-### Related Repositories
-- Official PLR: https://github.com/facebookresearch/level-replay
-- ACCEL website: https://accelagent.github.io/
-- Highway-Env: https://github.com/Farama-Foundation/HighwayEnv
-
-## 💡 Tips for Success
-
-1. **Start Simple**: Begin with Domain Randomization to understand your environment space
-2. **Monitor Carefully**: Watch both training and test performance
-3. **Be Patient**: PLR needs 50k+ steps to show clear benefits
-4. **Tune Gradually**: Change one hyperparameter at a time
-5. **Evaluate Properly**: Always use held-out test configurations
-
-## 🤝 Contributing
-
-Found a bug or want to improve the implementation? Here's how:
-
-1. Test on your environment variations
-2. Compare against baseline
-3. Share results and insights
-
-## 📝 Citation
-
-If you use this code in your research, please cite the original papers:
-
-```bibtex
-@inproceedings{jiang2021prioritized,
-  title={Prioritized Level Replay},
-  author={Jiang, Minqi and Grefenstette, Edward and Rockt{\"a}schel, Tim},
-  booktitle={ICML},
-  year={2021}
-}
-
-@inproceedings{parkerholder2022accel,
-  title={Evolving Curricula with Regret-Based Environment Design},
-  author={Parker-Holder, Jack and Jiang, Minqi and Dennis, Michael and Samvelyan, Mikayel and Foerster, Jakob and Grefenstette, Edward and Rockt{\"a}schel, Tim},
-  booktitle={ICML},
-  year={2022}
-}
-
-@article{tobin2017domain,
-  title={Domain randomization for transferring deep neural networks from simulation to the real world},
-  author={Tobin, Josh and Fong, Rachel and Ray, Alex and Schneider, Jonas and Zaremba, Wojciech and Abbeel, Pieter},
-  journal={IROS},
-  year={2017}
-}
-```
-
-## 📧 Support
-
-Questions? Check:
-1. `curriculum_learning_guide.md` for detailed explanations
-2. GitHub Issues for common problems
-3. Original paper repositories for reference implementations
-
----
-
-**Good luck with your curriculum learning experiments! 🎓🚗**
+- Parker-Holder et al. (2022) "Evolving Curricula with Regret-Based Environment Design" -- [arXiv:2203.01302](https://arxiv.org/abs/2203.01302)
+- Jiang et al. (2021) "Prioritized Level Replay" -- [arXiv:2010.03934](https://arxiv.org/abs/2010.03934)
+- highway-env -- [github.com/Farama-Foundation/HighwayEnv](https://github.com/Farama-Foundation/HighwayEnv)

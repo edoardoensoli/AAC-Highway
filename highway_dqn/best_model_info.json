@@ -1,9 +1,0 @@
-{
-  "step": 79000,
-  "mean_reward": 27.979948333333333,
-  "mean_length": 107.76666666666667,
-  "improvement": 6.110661366666665,
-  "saves_count": 23,
-  "total_episodes": 6966,
-  "timestamp": "2026-02-13T14:21:44.198621"
-}

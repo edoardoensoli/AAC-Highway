@@ -1,24 +1,13 @@
 """
 DQN + ACCEL Training for Highway-Env
 ======================================
-Implements ACCEL (Evolving Curricula with Regret-Based Environment Design)
+ACCEL (Evolving Curricula with Regret-Based Environment Design)
 with DQN on the highway-env driving simulator.
 
-Based on:
+References:
 - ACCEL: Parker-Holder et al., 2022 (https://accelagent.github.io/)
 - Robust PLR: Jiang et al., 2021 (https://arxiv.org/abs/2110.02439)
 - DCD Framework: Facebook Research (https://github.com/facebookresearch/dcd)
-
-Adapted for Stable Baselines3 DQN + highway-env.
-
-Key design decisions:
-- Uses highway-fast-v0 for 15x simulation speedup
-- SubprocVecEnv for true CPU parallelization (each env in its own process)
-- Lazy config updates via unwrapped.config.update (no env recreation)
-- PLR scoring via TD-error proxy + return deviation
-- Rank-based score transform with staleness weighting (as in DCD paper)
-- Proportionate replay schedule (DCD default)
-- ACCEL mutations = small random perturbations to env params
 """
 
 import numpy as np
@@ -50,28 +39,12 @@ from tqdm import tqdm
 
 class ConfigurableHighwayEnv(gymnasium.Wrapper):
     """
-    Wrapper per highway-env che supporta il cambio di configurazione lazy
-    e aggiunge una reward di prossimità per incentivare la distanza di sicurezza.
-    
-    La nuova configurazione viene applicata al prossimo reset(),
-    evitando di ricreare l'env durante un episodio attivo.
-    Questo è il pattern corretto per PLR/ACCEL dove i livelli cambiano
-    solo tra episodi.
-    
-    PROXIMITY REWARD:
-    Aggiunge una penalità continua quando l'agente è troppo vicino ad altri veicoli.
-    Questo insegna proattivamente a mantenere la distanza di sicurezza, invece di
-    imparare solo dal crash terminale (-5.0). La penalità è quadratica:
-    forte quando molto vicini, dolce quando a distanza moderata.
-    
-    Formula: penalty = -max_penalty * max(0, 1 - min_dist / safety_distance)²
-    
-    Con safety_distance=25m e max_penalty=0.5:
-      25m+ → 0.0 (safe)
-      15m  → -0.08/step (attenzione)
-      10m  → -0.18/step (pericoloso, quasi cancella speed reward)
-       5m  → -0.32/step (molto pericoloso, supera speed reward)
-       0m  → -0.50/step (contatto)
+    Highway-env wrapper with lazy config updates and optional proximity penalty.
+
+    Config changes are applied on the next reset(), avoiding env recreation
+    during active episodes. Proximity penalty adds a quadratic cost based on
+    distance to nearby vehicles:
+        penalty = -max_penalty * max(0, 1 - min_dist / safety_distance)^2
     """
 
     def __init__(self, env_id: str = "highway-fast-v0", initial_config: Optional[Dict] = None,
@@ -86,7 +59,7 @@ class ConfigurableHighwayEnv(gymnasium.Wrapper):
         super().__init__(env)
 
     def set_next_config(self, config: Dict):
-        """Schedula una nuova configurazione per il prossimo reset."""
+        """Schedule a new config to be applied on next reset()."""
         self._next_config = config.copy()
 
     def get_config(self) -> Dict:
@@ -96,15 +69,14 @@ class ConfigurableHighwayEnv(gymnasium.Wrapper):
         if self._next_config is not None:
             self._config = self._next_config
             self._next_config = None
-            # Aggiorna config direttamente — highway-env legge self.config in reset()
-            # Evita gymnasium.make() che è estremamente costoso (~100ms per chiamata)
+            # Update config in-place (avoids costly env recreation)
             self.env.unwrapped.config.update(self._config)
         return self.env.reset(**kwargs)
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
 
-        # Calcola penalità di prossimità solo se l'episodio è ancora attivo
+        # Apply proximity penalty only if episode is still active
         if not terminated:
             proximity_pen = self._compute_proximity_penalty()
             reward += proximity_pen
@@ -114,15 +86,9 @@ class ConfigurableHighwayEnv(gymnasium.Wrapper):
         return obs, reward, terminated, truncated, info
 
     def _compute_proximity_penalty(self) -> float:
-        """
-        Calcola una penalità basata sulla distanza minima dai veicoli vicini.
-        
-        Considera solo veicoli DAVANTI o ai lati (dx > -5m), non quelli già
-        superati dietro. La penalità è quadratica per creare un gradiente
-        più forte vicino alla collisione.
-        
-        Returns:
-            Penalità negativa (0.0 se sicuro, fino a -proximity_penalty se a contatto)
+        """Compute quadratic penalty based on min distance to nearby vehicles.
+        Only considers vehicles ahead or laterally close (dx > -5m, |dy| < 8m).
+        Returns 0.0 if safe, down to -proximity_penalty at contact.
         """
         try:
             ego = self.env.unwrapped.vehicle
@@ -140,9 +106,7 @@ class ConfigurableHighwayEnv(gymnasium.Wrapper):
             dx = v.position[0] - ego.position[0]
             dy = v.position[1] - ego.position[1]
 
-            # Considera solo veicoli davanti o nelle vicinanze laterali
-            # dx > -5: ignora veicoli già superati (ben dietro)
-            # |dy| < 8: ignora veicoli su corsie lontane (> 2 corsie, ~4m ciascuna)
+            # Only vehicles ahead or nearby laterally
             if dx > -5.0 and abs(dy) < 8.0:
                 dist = np.sqrt(dx * dx + dy * dy)
                 if dist < min_dist:
@@ -151,7 +115,7 @@ class ConfigurableHighwayEnv(gymnasium.Wrapper):
         if min_dist >= self.safety_distance:
             return 0.0
 
-        # Penalità quadratica: cresce rapidamente avvicinandosi
+        # Quadratic penalty: stronger when closer
         ratio = 1.0 - min_dist / self.safety_distance
         return -self.proximity_penalty * ratio * ratio
 
@@ -162,7 +126,7 @@ class ConfigurableHighwayEnv(gymnasium.Wrapper):
 
 @dataclass
 class Level:
-    """Un livello di training = configurazione highway-env + statistiche."""
+    """A training level = highway-env config + statistics."""
     seed: int
     config: Dict
     score: float = 0.0
@@ -178,20 +142,12 @@ class Level:
 class LevelSampler:
     """
     Prioritized Level Replay (PLR) sampler.
-    
-    Implementazione fedele al paper DCD/PLR con:
-    - Scoring via value_l1 (adattato come TD-error per DQN)
-    - Rank-based score transform (default DCD)
+
+    Faithful to the DCD/PLR paper:
+    - value_l1 scoring (TD-error proxy for DQN)
+    - Rank-based score transform (temperature=0.1)
     - Staleness-aware sampling (staleness_coef=0.3, power transform)
-    - Proportionate replay schedule (default DCD)
-    - Seed buffer con priorità replay_support
-    
-    Parametri DCD di riferimento:
-    - replay_prob: 0.95 (alta per ACCEL/Robust PLR)
-    - score_transform: rank, temperature: 0.1
-    - staleness_coef: 0.3, staleness_transform: power
-    - alpha: 1.0 (EWA smoothing)
-    - rho: 0.1 (min fill ratio prima di fare replay)
+    - Proportionate replay schedule
     """
 
     def __init__(
@@ -240,7 +196,7 @@ class LevelSampler:
         return self.seed_counter
 
     def add_level(self, config: Dict, parent_seed: Optional[int] = None) -> int:
-        """Aggiunge un livello al buffer. Se pieno, sostituisce il livello con score più basso."""
+        """Add a level to the buffer. If full, evict the lowest-score level."""
         seed = self._next_seed()
         level = Level(
             seed=seed,
@@ -254,7 +210,7 @@ class LevelSampler:
         )
 
         if len(self.levels) >= self.buffer_size:
-            # Rimuovi livello con score più basso (come DCD: seed_buffer_priority=replay_support)
+            # Evict lowest-score level (DCD: seed_buffer_priority=replay_support)
             min_seed = min(self.levels, key=lambda s: self.levels[s].score)
             del self.levels[min_seed]
 
@@ -264,7 +220,7 @@ class LevelSampler:
     def sample_replay_decision(self) -> bool:
         """
         Proportionate replay schedule (DCD default).
-        Replay con probabilità proporzionale al riempimento del buffer.
+        Replay probability scales with buffer fill ratio.
         """
         if not self.is_warm:
             return False
@@ -274,12 +230,12 @@ class LevelSampler:
         return False
 
     def sample_replay_level(self) -> int:
-        """Campiona un livello dal buffer con prioritized sampling."""
+        """Sample a level from buffer using prioritized sampling."""
         seeds = list(self.levels.keys())
         scores = np.array([self.levels[s].score for s in seeds])
         staleness = np.array([self.levels[s].staleness for s in seeds], dtype=np.float64)
 
-        # Score weights (rank transform, come DCD)
+        # Score weights (rank transform, DCD default)
         score_weights = self._transform_scores(
             self.score_transform, self.temperature, scores
         )
@@ -291,21 +247,21 @@ class LevelSampler:
                 self.staleness_transform, self.staleness_temperature, staleness
             )
 
-        # Combinazione pesata (come DCD: (1-s)*score + s*staleness)
+        # Weighted combination: (1-s)*score + s*staleness
         weights = (1 - self.staleness_coef) * score_weights + self.staleness_coef * staleness_weights
 
-        # Normalizza
+        # Normalize
         total = weights.sum()
         if total > 0:
             weights /= total
         else:
             weights = np.ones(len(seeds)) / len(seeds)
 
-        # Campiona
+        # Sample
         idx = self.rng.choice(len(seeds), p=weights)
         selected_seed = seeds[idx]
 
-        # Aggiorna staleness (come DCD: incrementa tutti, azzera il selezionato)
+        # Update staleness: increment all, reset selected
         for s in self.levels:
             self.levels[s].staleness += 1
         self.levels[selected_seed].staleness = 0
@@ -314,10 +270,8 @@ class LevelSampler:
 
     def update_score(self, seed: int, td_error: float, episode_return: float):
         """
-        Aggiorna lo score del livello.
-        
-        Usa TD-error come proxy per value_l1 (|returns - value_preds|)
-        che è la scoring function di default nel DCD paper.
+        Update level score using TD-error as proxy for value_l1
+        (DCD default scoring function).
         """
         if seed not in self.levels:
             return
@@ -327,18 +281,16 @@ class LevelSampler:
         level.returns.append(episode_return)
         level.td_errors.append(td_error)
 
-        # Score = media recente TD error (learning potential)
+        # Score = recent mean TD error (learning potential)
         recent = level.td_errors[-10:]
         new_score = np.mean(recent) if recent else 0.0
 
-        # EWA update (come DCD: alpha=1.0 di default, weighted update)
+        # EWA update (alpha=1.0 default)
         level.score = (1 - self.alpha) * level.score + self.alpha * new_score
         level.max_score = max(level.max_score, new_score)
 
     def _transform_scores(self, transform: str, temperature: float, scores: np.ndarray) -> np.ndarray:
-        """
-        Trasforma gli score per il sampling (matching esatto dell'implementazione DCD).
-        """
+        """Transform scores for sampling (DCD implementation)."""
         if len(scores) == 0:
             return np.array([])
 
@@ -397,16 +349,12 @@ class LevelSampler:
 
 class ACCELGenerator:
     """
-    Genera e muta configurazioni highway-env per il curriculum ACCEL.
-    
-    Il curriculum varia solo i parametri dell'ambiente (traffico, corsie, durata)
-    mantenendo fissi i parametri di reward per un segnale di apprendimento consistente.
-    
-    ACCEL mutations = perturbazioni random piccole (1-3 parametri) come nel paper.
+    Generates and mutates highway-env configs for the ACCEL curriculum.
+    Varies environment parameters (traffic, lanes, duration) while keeping
+    reward parameters fixed for a consistent learning signal.
     """
 
-    # Spazio dei parametri variabili per il curriculum
-    # Range progettati per coprire Stage 0 (2 corsie, 8 veicoli) → Stage 6 (2 corsie, 50 veicoli)
+    # Mutable parameter space for curriculum
     PARAM_SPACE = {
         'vehicles_count':  {'type': 'int',   'range': (5, 50),    'step': 5},
         'vehicles_density': {'type': 'float', 'range': (0.5, 2.0), 'step': 0.2},
@@ -415,44 +363,24 @@ class ACCELGenerator:
         'duration':        {'type': 'int',   'range': (30, 80),   'step': 10},
     }
 
-    # Parametri fissi (reward e simulazione - mai mutati per consistenza)
+    # Fixed parameters (reward and simulation - never mutated)
     #
-    # REWARD DESIGN SEMPLIFICATO (normalize_reward=False):
-    #   SOLO 2 obiettivi: vai veloce (supera le auto) + non crashare.
-    #
-    #   Per-step reward = collision_reward * crashed
-    #                   + high_speed_reward * speed_fraction
-    #
-    #   Guida normale ~25 m/s: +0.15/step (speed_frac ≈ 0.5)
-    #   Guida perfetta 30 m/s: +0.3/step  (speed_frac = 1.0)
-    #   Collisione:            -10.0 + episodio TERMINA
-    #
-    #   Con gamma=0.95, episodio 60 step (Stage 0: 30s×2Hz):
-    #     Return max scontato ≈ 0.3 * Σ(0.95^t, t=0..59) ≈ 5.7
-    #     Return normale    ≈ 0.15 * 18.9 ≈ 2.8
-    #     Crash = -10.0 istantaneo + perdita reward future
-    #     Crash a step 5:  ~-10.0 + earned(~1.0) = -9.0 vs survive(3.8) → gap 12.8
-    #     Crash a step 30: ~-10.0 * 0.95^30 + earned(2.9) = -0.2 vs survive(3.8)
-    #
-    #   RIMOSSO: right_lane_reward (rumore — spinge verso corsia lenta)
-    #   RIMOSSO: proximity_penalty (confondeva il segnale — su 2 corsie
-    #            l'agente è SEMPRE entro 25m da qualcuno)
+    # Reward: per-step = collision_reward * crashed + high_speed_reward * speed_fraction
+    #   Normal driving ~25 m/s: +0.15/step
+    #   Optimal 30 m/s:         +0.30/step
+    #   Collision:               -10.0 + episode terminates
     #
     FIXED_PARAMS = {
         'policy_frequency': 2,
-        'collision_reward': -10.0,        # Penalità MOLTO FORTE per crash: il segnale più chiaro
-        'high_speed_reward': 0.3,         # Allineato a baseline (0.3): confronto equo
-        'right_lane_reward': 0.0,         # DISABILITATO: era rumore, spingeva verso corsia lenta
-        'lane_change_reward': 0.0,        # Neutrale: cambi corsia liberi
+        'collision_reward': -10.0,
+        'high_speed_reward': 0.3,
+        'right_lane_reward': 0.0,
+        'lane_change_reward': 0.0,
         'reward_speed_range': [20, 30],
-        'normalize_reward': False,        # RAW rewards: crash = -10.0 (penalità vera, non mappata)
-        # OSSERVAZIONE: l'agente deve VEDERE abbastanza per prendere decisioni sicure.
-        # Default highway-env: solo 5 veicoli, solo davanti, no specchietto.
-        # Migliorato: 7 veicoli (vede quasi tutti), specchietto retrovisore,
-        # posizioni relative (molto più facili da imparare per la rete neurale).
+        'normalize_reward': False,
         'observation': {
             'type': 'Kinematics',
-            'vehicles_count': 7,           # Ego + 6 altri (default: 5 = ego + 4, troppo pochi)
+            'vehicles_count': 7,
             'features': ['presence', 'x', 'y', 'vx', 'vy'],
             'features_range': {
                 'x': [-100, 100],
@@ -460,93 +388,57 @@ class ACCELGenerator:
                 'vx': [-20, 20],
                 'vy': [-20, 20],
             },
-            'absolute': False,             # Posizioni RELATIVE all'ego (default, più facile da imparare)
-            'normalize': True,             # Normalizzato in [-1, 1]
-            'see_behind': True,             # SPECCHIETTO: vede chi arriva da dietro per cambi corsia sicuri
-            'order': 'sorted',             # Ordinati per distanza
+            'absolute': False,
+            'normalize': True,
+            'see_behind': True,
+            'order': 'sorted',
         },
-        # other_vehicles_type è ORA per-stage: IDM (prevedibile) → Aggressive (caotico)
-        # NON va qui perché get_stage_config() fa config.update(FIXED_PARAMS)
-        # e sovrascriverebbe il tipo veicolo specifico dello stage.
+        # other_vehicles_type is set per-stage (IDM -> Aggressive)
     }
 
-    # ---- Curriculum di difficoltà progressiva ----
-    # Ogni stage rappresenta un punto di ancoraggio nella scala di difficoltà.
-    # L'agente deve padroneggiare uno stage prima di passare al successivo.
-    # ACCEL muta livelli ATTORNO allo stage corrente per esplorare la frontiera.
+    # Progressive difficulty stages.
+    # One variable changes per stage transition.
     #
-    # DESIGN KEY v5: Veicoli aggressivi introdotti PRIMA (Stage 3) per rafforzare
-    # la robustezza. L'agente impara a gestire l'imprevedibilità su traffico moderato,
-    # poi affronta traffico denso CON veicoli già aggressivi → più resiliente.
-    #
-    # REGOLA FERREA: cambiare UNA SOLA variabile alla volta tra stage consecutivi.
-    #
-    # Progressione (8 stage):
-    #   Stage 0: 2 corsie, poche auto IDM → impara la meccanica base (schivare)
-    #   Stage 1: 3 corsie, poche auto IDM → impara navigazione multi-corsia
-    #   Stage 2: 3 corsie, più auto IDM → gestisce traffico moderato
-    #   Stage 3: 3 corsie, auto AGGRESSIVE → impara imprevedibilità SUBITO
-    #   Stage 4: 3 corsie, aggressive + denso → traffico fitto con aggressivi
-    #   Stage 5: 3 corsie, aggressive + lungo → sopravvive a lungo con aggressivi
-    #   Stage 6: 3 corsie, aggressive + più auto → traffico intenso
-    #   Stage 7: 4 corsie, aggressive + denso + lungo → scenario finale complesso
+    # Progression:
+    #   Stage 0: 2 lanes, few cars -> basic dodging
+    #   Stage 1: 3 lanes, same cars -> multi-lane navigation
+    #   Stage 2: 3 lanes, more cars -> moderate traffic
+    #   Stage 3: 3 lanes, higher density -> denser traffic
+    #   Stage 4: 3 lanes, longer duration -> long survival
+    #   Stage 5: 3 lanes, aggressive drivers -> unpredictability
+    #   Stage 6: 4 lanes, dense + aggressive -> final scenario
     DIFFICULTY_STAGES = [
-        {   # Stage 0: 2 corsie, 8 auto IDM — IMPARA A SCHIVARE
-            # 2 corsie + 8 macchine = incontri frequenti, DEVE cambiare corsia.
-            # Durata corta (30s = max 60 step) = facile sopravvivere.
+        {   # Stage 0: 2 lanes, 8 cars - basic lane changing
             'vehicles_count': 8, 'vehicles_density': 0.8,
             'lanes_count': 2, 'initial_spacing': 2.0, 'duration': 30,
             'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
         },
-        {   # Stage 1: 3 CORSIE — nuova abilità chiave: navigazione multi-corsia
-            # Stesse auto (8), stessa durata (30s), ma 3 corsie.
-            # L'agente deve imparare a sfruttare la corsia extra per sorpassare.
-            # UNA variabile cambiata: lanes_count 2 → 3.
+        {   # Stage 1: 3 lanes - multi-lane navigation
             'vehicles_count': 8, 'vehicles_density': 0.8,
             'lanes_count': 3, 'initial_spacing': 2.0, 'duration': 30,
             'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
         },
-        {   # Stage 2: 3 corsie, PIÙ auto IDM — traffico moderato su 3 corsie
-            # Ora che sa navigare su 3 corsie, aumenta il traffico.
-            # UNA variabile: vehicles_count 8 → 15.
+        {   # Stage 2: 3 lanes, more vehicles
             'vehicles_count': 15, 'vehicles_density': 0.8,
             'lanes_count': 3, 'initial_spacing': 2.0, 'duration': 30,
             'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
         },
-        {   # Stage 3: 3 corsie, auto AGGRESSIVE — impara imprevedibilità
-            # CHIAVE: introduce veicoli aggressivi SU TRAFFICO MODERATO.
-            # Stesse 15 auto, stessa densità (0.8), ma comportamento imprevedibile.
-            # L'agente impara prima a gestire cambi corsia improvvisi in condizioni
-            # controllate, poi affronterà traffico denso con questa abilità.
-            # UNA variabile: IDMVehicle → AggressiveVehicle.
-            'vehicles_count': 15, 'vehicles_density': 0.8,
-            'lanes_count': 3, 'initial_spacing': 2.0, 'duration': 30,
-            'other_vehicles_type': 'highway_env.vehicle.behavior.AggressiveVehicle',
-        },
-        {   # Stage 4: 3 corsie, aggressive + DENSITÀ AUMENTATA — traffico più fitto
-            # Ora che gestisce veicoli aggressivi, aumenta la densità.
-            # UNA variabile: vehicles_density 0.8 → 1.0.
+        {   # Stage 3: 3 lanes, higher density
             'vehicles_count': 15, 'vehicles_density': 1.0,
             'lanes_count': 3, 'initial_spacing': 2.0, 'duration': 30,
-            'other_vehicles_type': 'highway_env.vehicle.behavior.AggressiveVehicle',
+            'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
         },
-        {   # Stage 5: 3 corsie, aggressive + DURATA AUMENTATA — sopravvive a lungo
-            # Ora che gestisce traffico denso con aggressivi, deve farlo PIÙ A LUNGO.
-            # UNA variabile: duration 30 → 50.
+        {   # Stage 4: 3 lanes, longer duration
             'vehicles_count': 15, 'vehicles_density': 1.0,
             'lanes_count': 3, 'initial_spacing': 2.0, 'duration': 50,
-            'other_vehicles_type': 'highway_env.vehicle.behavior.AggressiveVehicle',
+            'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
         },
-        {   # Stage 6: 3 corsie, aggressive + PIÙ AUTO — traffico intenso
-            # Aumenta il numero di veicoli aggressivi.
-            # UNA variabile: vehicles_count 15 → 20.
+        {   # Stage 5: 3 lanes, aggressive traffic
             'vehicles_count': 20, 'vehicles_density': 1.0,
             'lanes_count': 3, 'initial_spacing': 1.5, 'duration': 50,
             'other_vehicles_type': 'highway_env.vehicle.behavior.AggressiveVehicle',
         },
-        {   # Stage 7: 4 corsie, aggressive + denso + lungo — scenario finale
-            # Scenario complesso: 4 corsie, tante auto, aggressività, lunga durata.
-            # DUE variabili (finale): lanes_count 3 → 4, vehicles_count 20 → 30, density 1.0 → 1.5.
+        {   # Stage 6: 4 lanes, dense + aggressive - final
             'vehicles_count': 30, 'vehicles_density': 1.5,
             'lanes_count': 4, 'initial_spacing': 1.5, 'duration': 60,
             'other_vehicles_type': 'highway_env.vehicle.behavior.AggressiveVehicle',
@@ -555,7 +447,6 @@ class ACCELGenerator:
 
     def __init__(self, base_config: Optional[Dict] = None, seed: int = 42):
         self.rng = np.random.RandomState(seed)
-        # Default: Stage 0 (facile) — la progressione parte dal basso
         self.base_config = base_config or self.DIFFICULTY_STAGES[0].copy()
 
     @property
@@ -563,20 +454,20 @@ class ACCELGenerator:
         return len(self.DIFFICULTY_STAGES)
 
     def get_stage_config(self, stage_idx: int) -> Dict:
-        """Ritorna la config completa per lo stage di difficoltà specificato."""
+        """Return the full config for the given difficulty stage."""
         idx = min(stage_idx, len(self.DIFFICULTY_STAGES) - 1)
         config = self.DIFFICULTY_STAGES[idx].copy()
         config.update(self.FIXED_PARAMS)
         return config
 
     def base_level(self) -> Dict:
-        """Config base del livello (Stage 0 = facile)."""
+        """Return the base level config (Stage 0)."""
         config = self.base_config.copy()
         config.update(self.FIXED_PARAMS)
         return config
 
     def random_level(self) -> Dict:
-        """Genera un livello completamente random (Domain Randomization)."""
+        """Generate a fully random level (Domain Randomization)."""
         config = {}
         config.update(self.FIXED_PARAMS)
 
@@ -592,17 +483,9 @@ class ACCELGenerator:
     def mutate_level(self, config: Dict, num_edits: int = 3,
                      stage_bounds: Optional[Dict] = None) -> Dict:
         """
-        Muta un livello con perturbazioni ACCEL-style.
-        
-        Come nel paper DCD/ACCEL:
-        - Seleziona num_edits parametri random
-        - Applica perturbazione ±step in una direzione random
-        - Clip ai range dello stage (se forniti) o al range globale
-        
-        Args:
-            stage_bounds: Dict param → (lo, hi) per limitare le mutazioni
-                          allo "spazio" dello stage corrente. Previene
-                          chain-drift verso difficoltà Expert su Stage 0.
+        Mutate a level with ACCEL-style perturbations.
+        Selects num_edits random parameters and applies +/-step perturbation.
+        Clips to stage_bounds if provided, otherwise to global range.
         """
         mutated = config.copy()
         params = list(self.PARAM_SPACE.keys())
@@ -614,7 +497,7 @@ class ACCELGenerator:
             current = mutated.get(param, self.base_config.get(param, spec['range'][0]))
             new_val = current + direction * spec['step']
 
-            # Clip ai bounds dello stage (se forniti) o al range globale
+            # Clip to stage bounds (if provided) or global range
             if stage_bounds and param in stage_bounds:
                 lo, hi = stage_bounds[param]
             else:
@@ -626,21 +509,15 @@ class ACCELGenerator:
             else:
                 mutated[param] = round(float(new_val), 2)
 
-        # Assicura parametri fissi
+        # Ensure fixed params are preserved
         mutated.update(self.FIXED_PARAMS)
         return mutated
 
     def get_stage_param_bounds(self, stage_idx: int) -> Dict[str, Tuple]:
         """
-        Ritorna i range validi per le mutazioni allo stage dato.
-        
-        Bounds STRETTI: le mutazioni possono variare solo di +/- 1 step
-        attorno ai parametri dello stage CORRENTE. Non raggiungono mai
-        la difficoltà dello stage successivo.
-        
-        Questo è fondamentale perché: se i bounds arrivano allo stage N+1,
-        PLR preferirà i livelli più difficili (alto regret) e l'agente
-        finisce per allenarsi su livelli che non può ancora affrontare.
+        Return valid mutation ranges for the given stage.
+        Bounds are tight: +/- 1 step around current stage values,
+        preventing drift to next stage difficulty.
         """
         idx = min(stage_idx, len(self.DIFFICULTY_STAGES) - 1)
         current = self.DIFFICULTY_STAGES[idx]
@@ -649,7 +526,7 @@ class ACCELGenerator:
         for param, spec in self.PARAM_SPACE.items():
             curr_val = current.get(param, spec['range'][0])
 
-            # Range: solo +/- 1 step attorno al valore corrente
+            # Range: +/- 1 step around the current value
             lo = max(spec['range'][0], curr_val - spec['step'])
             hi = min(spec['range'][1], curr_val + spec['step'])
             bounds[param] = (lo, hi)
@@ -663,24 +540,14 @@ class ACCELGenerator:
 
 class ACCELCallback(BaseCallback):
     """
-    Callback SB3 che implementa il loop ACCEL con progressione basata su mastery.
-    
-    Algoritmo ACCEL (Parker-Holder et al. 2022, DCD Framework):
-    1. Il modello inizia sullo Stage 0 (facile: poche macchine, poco traffico)
-    2. A OGNI fine episodio, per ciascun env si decide il prossimo livello:
-       a) PLR Replay: campiona livello ad alto regret dal buffer (prob ~0.95)
-       b) ACCEL Edit: muta un livello ad alto score (prob ~0.5 del rimanente)
-       c) Stage Config: usa la config dello stage corrente
-    3. Il PLR buffer traccia lo score (TD-error) di ogni livello visitato
-    4. Quando l'agente padroneggia lo stage (alta survival rate), avanza al prossimo
-    5. Ogni stage è più difficile: più macchine, più densità, meno corsie
-    
-    Differenze rispetto alla versione precedente:
-    - Decisione per-env (ogni env può avere un livello diverso)
-    - PLR replay effettivamente utilizzato (sample_replay_decision)
-    - Difficoltà progressiva con stage espliciti (Easy → Expert)
-    - Mastery basata su survival (lunghezza episodio), non su mediana mobile
-    - Max episodi per stage per prevenire overfitting
+    SB3 callback implementing the ACCEL loop with mastery-based stage progression.
+
+    Per-episode, each env decides its next level:
+    a) PLR Replay: sample high-regret level from buffer (prob ~0.95)
+    b) ACCEL Edit: mutate a high-score level (prob ~0.5 of remaining)
+    c) Stage Config: use current stage's anchor config
+
+    Stage advancement requires sustained mastery (high survival rate).
     """
 
     def __init__(
@@ -722,70 +589,59 @@ class ACCELCallback(BaseCallback):
         self.save_interval = save_interval
         self.use_fast_env = use_fast_env
 
-        # RNG per decisioni ACCEL
+        # ACCEL decision RNG
         self.rng = np.random.RandomState(42)
 
-        # Stato per-env: quale livello sta eseguendo ogni env
+        # Per-env state: which level each env is running
         self.env_level_seeds = [None] * num_envs
 
-        # Tracking globale
+        # Global tracking
         self.total_episodes = 0
         self.all_returns = deque(maxlen=5000)
         self.all_lengths = deque(maxlen=5000)
         self.warmup_done = False
 
-        # === STAGE TRACKING (Curriculum Progressivo) ===
-        # current_stage è impostato più sotto in base a start_stage
-        self.stage_episodes: List[Dict] = []           # episodi dello stage [{return, length}]
-        self.stages_mastered: List[Dict] = []          # storico stages padroneggiati
-        self.current_stage_seed: Optional[int] = None  # seed del livello base dello stage
+        # Stage tracking
+        self.stage_episodes: List[Dict] = []
+        self.stages_mastered: List[Dict] = []
+        self.current_stage_seed: Optional[int] = None
         self.best_return_ever: float = float('-inf')
         self.last_checkpoint_step: int = 0
 
-        # ---- Eval episodes: mastery basata SOLO su episodi sulla config pura dello stage ----
-        # Problema risolto: prima TUTTI gli episodi (inclusi PLR replay su livelli
-        # impossibili mutati) venivano contati per la mastery → survival sempre basso.
-        # Ora: 20% degli episodi sono sulla config pura dello stage, e SOLO quelli
-        # vengono usati per la mastery. Gli altri episodi servono per il TRAINING.
-        self.eval_episodes: List[Dict] = []  # Solo episodi su pure stage config
-        self.env_is_eval = [False] * num_envs  # Flag per-env
-        self.eval_fraction = 0.3  # 30% episodi su config pura per mastery
+        # Eval episodes: mastery is measured ONLY on pure stage config episodes
+        self.eval_episodes: List[Dict] = []
+        self.env_is_eval = [False] * num_envs
+        self.eval_fraction = 0.3
 
-        # ---- COMPETENCE GATE ----
-        # L'agente deve dimostrare competenza BASE prima che PLR/ACCEL si attivino.
-        # Senza questa protezione, PLR crea una death spiral: l'agente fallisce
-        # su livelli mutati → alto regret → più replay su quei livelli → ancora fallisce.
-        # Con il gate: sotto il 50% survival, 100% episodi su config pura dello stage.
-        self.competence_survival = 0.0  # Survival corrente (aggiornata ogni N episodi)
-        self.competence_gate_threshold = 0.50  # Sotto questo, NO PLR/ACCEL
-        self.competence_full_threshold = 0.75  # Sopra questo, PLR/ACCEL a pieno regime
-        self.competence_check_interval = 25  # Controlla ogni N episodi
+        # Competence gate: PLR/ACCEL disabled below survival threshold
+        self.competence_survival = 0.0
+        self.competence_gate_threshold = 0.50
+        self.competence_full_threshold = 0.75
+        self.competence_check_interval = 25
 
-        # ---- STALL DETECTION ----
-        # Se il survival non migliora per N eval episodes, entra in focus-mode:
-        # più training sulla config pura, meno distrazioni da PLR.
-        self.stall_patience = 200  # eval episodes senza miglioramento
-        self.stall_best_survival = 0.0  # miglior survival visto sullo stage
-        self.stall_eval_at_best = 0  # n_eval quando abbiamo visto il best
-        self.in_focus_mode = False  # se True, eval_fraction sale al 60%
+        # Stall detection: enter focus mode if survival plateaus
+        self.stall_patience = 200
+        self.stall_best_survival = 0.0
+        self.stall_eval_at_best = 0
+        self.in_focus_mode = False
 
         # Timing
         self.start_time = None
         self.pbar = None
 
-        # Inizia dallo stage specificato (default: 0)
+        # Start from specified stage (default: 0)
         self.current_stage = min(start_stage, generator.num_stages - 1)
         stage_config = generator.get_stage_config(self.current_stage)
         self.current_stage_seed = sampler.add_level(stage_config)
         for i in range(num_envs):
             self.env_level_seeds[i] = self.current_stage_seed
 
-        # Se start_stage > 0, salta il warmup (l'agente sa già guidare)
+        # Skip warmup if starting from a later stage
         if self.current_stage > 0:
             self.warmup_done = True
-            self.warmup_episodes = 0  # nessun warmup necessario
+            self.warmup_episodes = 0
 
-        # Pre-seed PLR buffer con varianti dello stage iniziale (con bounds!)
+        # Pre-seed PLR buffer with initial stage variants
         stage_bounds = generator.get_stage_param_bounds(self.current_stage)
         for i in range(min(20, sampler.buffer_size)):
             variant = generator.mutate_level(stage_config, num_edits=2, stage_bounds=stage_bounds)
@@ -800,13 +656,13 @@ class ACCELCallback(BaseCallback):
         if self.pbar:
             self.pbar.update(self.num_envs)
 
-        # Estrai TD-error dal logger DQN
+        # Extract TD-error from DQN logger
         current_loss = 0.0
         if hasattr(self.model, 'logger') and self.model.logger:
             if 'train/loss' in self.model.logger.name_to_value:
                 current_loss = self.model.logger.name_to_value['train/loss']
 
-        # Controlla episodi completati
+        # Check completed episodes
         infos = self.locals.get('infos', [])
         for env_idx, info in enumerate(infos):
             if 'episode' in info:
@@ -818,48 +674,47 @@ class ACCELCallback(BaseCallback):
                 self.all_lengths.append(ep_length)
                 self.stage_episodes.append({'return': ep_return, 'length': ep_length})
 
-                # Se questo episodio era su config pura dello stage → conta per mastery
-                # Durante il warmup, TUTTI gli episodi sono su config pura → contano tutti
+                # If this was a pure stage config episode -> counts for mastery
+                # During warmup, ALL episodes are on pure config
                 if self.env_is_eval[env_idx] or not self.warmup_done:
                     self.eval_episodes.append({'return': ep_return, 'length': ep_length})
                     self.env_is_eval[env_idx] = False
 
-                # Aggiorna best return
+                # Update best return
                 if ep_return > self.best_return_ever:
                     self.best_return_ever = ep_return
 
-                # Calcola score per PLR (Positive Value Loss regret proxy)
+                # Compute PLR score (Positive Value Loss regret proxy)
                 # PVL (Parker-Holder et al. 2022): score = max(0, V(s) - return)
-                # Livelli dove l'agente va peggio del previsto → regret alto → più replay
                 level_seed = self.env_level_seeds[env_idx]
                 if level_seed is not None:
                     mean_return = np.mean(list(self.all_returns)[-100:]) if len(self.all_returns) > 1 else 0
-                    pvl_score = max(0.0, mean_return - ep_return)  # Solo deficit (non surplus)
-                    # Bonus per varianza alta: livelli inconsistenti = alto learning potential
+                    pvl_score = max(0.0, mean_return - ep_return)  # Only deficit
+                    # Bonus for high variance: inconsistent levels = high learning potential
                     level = self.sampler.levels.get(level_seed)
                     if level and len(level.returns) >= 3:
                         pvl_score += np.std(level.returns[-5:]) * 0.3
-                    td_proxy = pvl_score + current_loss * 0.1  # TD-error come contributo secondario
+                    td_proxy = pvl_score + current_loss * 0.1  # TD-error as secondary signal
                     self.sampler.update_score(level_seed, td_proxy, ep_return)
 
-                # Dopo il warmup, curriculum ACCEL attivo
+                # After warmup, ACCEL curriculum is active
                 if self.total_episodes >= self.warmup_episodes:
                     if not self.warmup_done:
                         self.warmup_done = True
-                        self._update_competence()  # Calcola competence con dati del warmup
+                        self._update_competence()  # Compute competence with warmup data
                         if self.verbose:
                             print(f"\n{'='*55}")
-                            print(f" WARMUP COMPLETO ({self.warmup_episodes} ep)")
-                            print(f" Curriculum ACCEL attivo — Stage 0/{self.generator.num_stages-1}")
-                            print(f" Soglia mastery: {self.mastery_threshold*100:.0f}% survival")
-                            print(f" Competence post-warmup: {self.competence_survival*100:.0f}%")
+                            print(f" WARMUP COMPLETE ({self.warmup_episodes} ep)")
+                            print(f" ACCEL Curriculum active - Stage 0/{self.generator.num_stages-1}")
+                            print(f" Mastery threshold: {self.mastery_threshold*100:.0f}% survival")
+                            print(f" Post-warmup competence: {self.competence_survival*100:.0f}%")
                             print(f"{'='*55}")
 
-                    # Controlla mastery dello stage corrente
+                    # Advance stage if mastery achieved
                     if self._check_mastery():
                         self._advance_stage()
 
-                    # ACCEL: decidi il prossimo livello per QUESTO env (vero algoritmo DCD)
+                    # Decide next level for this env (per-env DCD algorithm)
                     next_seed, next_config = self._decide_next_level(env_idx)
                     self.env_level_seeds[env_idx] = next_seed
                     try:
@@ -868,11 +723,11 @@ class ACCELCallback(BaseCallback):
                         if self.verbose > 1:
                             print(f"[WARN] set_next_config env {env_idx}: {e}")
 
-                # Log periodico
+                # Periodic logging
                 if self.total_episodes % self.log_interval == 0:
                     self._log_progress()
 
-        # Salvataggio periodico
+        # Periodic checkpoint
         if self.save_dir and self.n_calls > 0 and self.n_calls % (self.save_interval // self.num_envs) == 0:
             self._save_checkpoint()
 
@@ -880,50 +735,38 @@ class ACCELCallback(BaseCallback):
 
     def _decide_next_level(self, env_idx: int) -> Tuple[int, Dict]:
         """
-        Decisione ACCEL per-env con COMPETENCE GATE + FOCUS MODE.
-        
-        Fase 1 (survival < 50%): SOLO config pura dello stage.
-          L'agente deve prima imparare a guidare senza crash.
-          PLR/ACCEL sono completamente disabilitati.
-        
-        Fase 2 (survival 50-75%): PLR graduale.
-          PLR si attiva con probabilità proporzionale alla competenza.
-          Mutazioni limitate e conservative.
-        
-        Fase 3 (survival > 75%): PLR/ACCEL a pieno regime.
-          Come il paper originale: replay 95%, mutazioni ACCEL.
-        
-        Focus mode (stallo): eval_fraction sale al 60%, PLR dimezzato.
-          L'agente si concentra sulla config pura per sbloccarsi.
+        Per-env ACCEL decision with competence gate and focus mode.
+
+        Phase 1 (survival < 50%): pure stage config only, no PLR/ACCEL.
+        Phase 2 (survival 50-75%): gradual PLR activation.
+        Phase 3 (survival > 75%): full PLR/ACCEL as in the paper.
+        Focus mode (stall): higher eval fraction, reduced PLR.
         """
-        # ---- Aggiorna competence ogni N episodi ----
+        # Update competence periodically
         if (len(self.eval_episodes) > 0 and 
             len(self.eval_episodes) % self.competence_check_interval == 0):
             self._update_competence()
 
-        # ---- Eval fraction dinamico ----
+        # Dynamic eval fraction
         current_eval_fraction = 0.60 if self.in_focus_mode else self.eval_fraction
 
-        # ---- 0. EVAL: config pura dello stage per mastery tracking ----
-        # Sempre attivo: serve per misurare la vera capacità dell'agente
+        # 0. EVAL: pure stage config for mastery tracking
         if self.rng.random() < current_eval_fraction:
             config = self.generator.get_stage_config(self.current_stage)
             self.env_is_eval[env_idx] = True
             return self.current_stage_seed, config
 
-        # ---- COMPETENCE GATE: sotto soglia, SOLO stage config ----
+        # Competence gate: below threshold, only stage config
         if self.competence_survival < self.competence_gate_threshold:
-            # L'agente non sa ancora guidare. Niente PLR, niente mutazioni.
             config = self.generator.get_stage_config(self.current_stage)
             return self.current_stage_seed, config
 
-        # ---- PLR/ACCEL scaling basato su competenza ----
-        # Scala lineare: 50% survival → PLR 0%, 75% survival → PLR 95%
+        # PLR/ACCEL probability scales linearly with competence (50% -> 0%, 75% -> 95%)
         competence_ratio = min(1.0, max(0.0,
             (self.competence_survival - self.competence_gate_threshold) /
             (self.competence_full_threshold - self.competence_gate_threshold)
         ))
-        # In focus mode, dimezza PLR/ACCEL
+        # In focus mode, halve PLR/ACCEL
         if self.in_focus_mode:
             competence_ratio *= 0.5
         effective_replay_prob = self.sampler.replay_prob * competence_ratio
@@ -931,17 +774,17 @@ class ACCELCallback(BaseCallback):
 
         stage_bounds = self.generator.get_stage_param_bounds(self.current_stage)
 
-        # 1. PLR Replay — campiona livello ad alto regret dal buffer
+        # 1. PLR Replay - sample high-regret level from buffer
         if self.sampler.is_warm and self.rng.random() < effective_replay_prob:
             seed = self.sampler.sample_replay_level()
             config = self.sampler.levels[seed].config
-            # Filtra: se il livello è fuori dai bounds dello stage, scartalo
+            # Filter: skip levels outside stage bounds
             if self._is_within_stage_bounds(config, stage_bounds):
                 self.sampler.stats['replay_count'] += 1
                 return seed, config
-            # Livello troppo difficile → fallback a stage config
+            # Level too difficult -> fall back to stage config
 
-        # 2. ACCEL Edit — muta un livello CON bounds dello stage
+        # 2. ACCEL Edit - mutate a level within stage bounds
         if self.use_accel and self.rng.random() < effective_editor_prob:
             if self.sampler.is_warm:
                 parent_seed = self.sampler.sample_replay_level()
@@ -956,16 +799,13 @@ class ACCELCallback(BaseCallback):
             self.sampler.stats['mutation_count'] += 1
             return new_seed, new_config
 
-        # 3. Stage config corrente (baseline dello stage)
+        # 3. Current stage config (fallback)
         config = self.generator.get_stage_config(self.current_stage)
         return self.current_stage_seed, config
 
     def _update_competence(self):
-        """Aggiorna il livello di competenza basato sugli eval episodes recenti.
-        
-        Metrica CONTINUA: misura QUANTO l'agente sopravvive, non solo SE sopravvive.
-        Un episodio di 50/60 step vale 0.83 (prima valeva 0 perché < 51 step soglia).
-        Questo permette al competence gate di aprirsi proporzionalmente ai progressi.
+        """Update competence level based on recent eval episodes.
+        Uses continuous metric: mean proportion of episode completed (0.0-1.0).
         """
         if len(self.eval_episodes) < 10:
             self.competence_survival = 0.0
@@ -977,12 +817,12 @@ class ACCELCallback(BaseCallback):
         policy_freq = stage_config.get('policy_frequency', 2)
         expected_steps = expected_duration * policy_freq
 
-        # Continuo: proporzione media di episodio completata (0.0 - 1.0)
+        # Continuous: mean proportion of episode completed (0.0 - 1.0)
         survival_scores = [min(1.0, ep['length'] / expected_steps) for ep in recent]
         self.competence_survival = float(np.mean(survival_scores))
 
     def _is_within_stage_bounds(self, config: Dict, bounds: Dict) -> bool:
-        """Verifica che una config sia entro i bounds dello stage corrente."""
+        """Check if a config is within the current stage bounds."""
         for param, (lo, hi) in bounds.items():
             val = config.get(param)
             if val is not None and (val < lo or val > hi):
@@ -991,11 +831,9 @@ class ACCELCallback(BaseCallback):
 
     def _check_mastery(self) -> bool:
         """
-        Verifica se lo stage corrente è padroneggiato.
-        
-        Filosofia: NESSUN soft-advance. L'agente DEVE raggiungere la soglia.
-        Se è in stallo, entra in focus-mode (più training su config pura)
-        ma non avanza mai senza vera competenza.
+        Check if the current stage is mastered.
+        No soft-advance: the agent must reach the threshold.
+        Stall detection triggers focus mode but never auto-advances.
         """
         n_eval = len(self.eval_episodes)
         n_total = len(self.stage_episodes)
@@ -1005,11 +843,7 @@ class ACCELCallback(BaseCallback):
 
         recent = self.eval_episodes[-self.mastery_window:]
 
-        # Metrica CONTINUA: media della proporzione di episodio completata
-        # Invece di binario (sopravvissuto sì/no con soglia 85% durata),
-        # misura QUANTO dell'episodio è stato completato.
-        # Es: 50/60 step = 0.83, 30/60 = 0.50, 60/60 = 1.00
-        # Mastery a 0.85 significa: in media l'agente completa l'85% dell'episodio.
+        # Continuous metric: mean proportion of episode completed
         stage_config = self.generator.get_stage_config(self.current_stage)
         expected_duration = stage_config.get('duration', 60)
         policy_freq = stage_config.get('policy_frequency', 2)
@@ -1018,29 +852,29 @@ class ACCELCallback(BaseCallback):
         survival_scores = [min(1.0, ep['length'] / expected_steps) for ep in recent]
         survival_rate = float(np.mean(survival_scores))
 
-        # ---- Stall detection: se survival non migliora, entra in focus mode ----
-        if survival_rate > self.stall_best_survival + 0.02:  # miglioramento > 2%
+        # Stall detection: enter focus mode if survival plateaus
+        if survival_rate > self.stall_best_survival + 0.02:  # > 2% improvement
             self.stall_best_survival = survival_rate
             self.stall_eval_at_best = n_eval
             if self.in_focus_mode:
                 self.in_focus_mode = False
                 if self.verbose:
-                    print(f"\n  [FOCUS OFF] Survival migliorato a {survival_rate*100:.0f}% "
-                          f"→ esco dal focus mode")
+                    print(f"\n  [FOCUS OFF] Survival improved to {survival_rate*100:.0f}% "
+                          f"-> exiting focus mode")
 
         stall_duration = n_eval - self.stall_eval_at_best
         if stall_duration >= self.stall_patience and not self.in_focus_mode:
             self.in_focus_mode = True
             if self.verbose:
-                print(f"\n  [FOCUS ON] Stallo da {stall_duration} eval ep "
+                print(f"\n  [FOCUS ON] Stall for {stall_duration} eval ep "
                       f"(survival={survival_rate*100:.0f}%, best={self.stall_best_survival*100:.0f}%) "
-                      f"→ focus mode: 60% eval, PLR ridotto")
+                      f"-> focus mode: 60% eval, reduced PLR")
 
-        # ---- Mastery piena: soglia raggiunta ----
+        # Mastery reached
         if survival_rate >= self.mastery_threshold:
             return True
 
-        # ---- Nessun soft-advance: l'agente DEVE padroneggiare lo stage ----
+        # No soft-advance: must reach threshold
         if self.verbose and n_total >= 500 and n_total % 200 == 0:
             print(f"\n  [STAGE {self.current_stage}] {n_total} ep totali, {n_eval} eval "
                   f"— survival {survival_rate*100:.0f}% / target {self.mastery_threshold*100:.0f}% "
@@ -1050,7 +884,7 @@ class ACCELCallback(BaseCallback):
 
     @property
     def mastery_info(self) -> Dict:
-        """Informazioni sullo stato di mastery (basata su eval episodes)."""
+        """Current mastery status based on eval episodes."""
         if not self.eval_episodes:
             return {'survival_rate': 0, 'avg_return': 0, 'eval_episodes': 0,
                     'total_episodes': len(self.stage_episodes)}
@@ -1059,7 +893,7 @@ class ACCELCallback(BaseCallback):
         expected_duration = stage_config.get('duration', 60)
         policy_freq = stage_config.get('policy_frequency', 2)
         expected_steps = expected_duration * policy_freq
-        # Metrica continua: proporzione media di episodio completata
+        # Continuous metric: mean proportion of episode completed
         survival_scores = [min(1.0, ep['length'] / expected_steps) for ep in recent]
         return {
             'survival_rate': float(np.mean(survival_scores)) * 100,
@@ -1070,17 +904,16 @@ class ACCELCallback(BaseCallback):
 
     def _advance_stage(self):
         """
-        Stage padroneggiato: avanza allo stage di difficoltà successivo.
-        
-        Ogni stage ha una config di ancoraggio (DIFFICULTY_STAGES).
-        La nuova config viene aggiunta al buffer PLR e tutti gli env
-        vengono aggiornati al nuovo stage come punto di partenza.
+        Advance to the next difficulty stage.
+
+        Saves the mastered stage, updates the PLR buffer with
+        the new stage config and variants, and resets tracking.
         """
         old_stage = self.current_stage
         recent_eps = self.stage_episodes[-self.mastery_window:]
         avg_return = np.mean([ep['return'] for ep in recent_eps]) if recent_eps else 0
 
-        # Salva lo stage padroneggiato nello storico
+        # Record mastered stage in history
         self.stages_mastered.append({
             'stage': old_stage,
             'avg_return': float(avg_return),
@@ -1089,34 +922,34 @@ class ACCELCallback(BaseCallback):
             'config': self.generator.get_stage_config(old_stage),
         })
 
-        # Avanza (o resta sull'ultimo se già al massimo)
+        # Advance (or stay on last if already at max)
         self.current_stage = min(old_stage + 1, self.generator.num_stages - 1)
 
         if self.verbose:
             new_cfg = self.generator.get_stage_config(self.current_stage)
             print(f"\n{'*'*55}")
-            print(f" ★ STAGE {old_stage} PADRONEGGIATO!")
-            print(f"   Reward media: {avg_return:.2f}")
-            print(f"   Episodi sullo stage: {len(self.stage_episodes)}")
+            print(f" ★ STAGE {old_stage} MASTERED!")
+            print(f"   Avg reward: {avg_return:.2f}")
+            print(f"   Episodes on stage: {len(self.stage_episodes)}")
             if self.current_stage > old_stage:
-                print(f"   → Avanzo allo Stage {self.current_stage}")
+                print(f"   -> Advancing to Stage {self.current_stage}")
                 print(f"   Config: vehicles={new_cfg.get('vehicles_count')}, "
                       f"density={new_cfg.get('vehicles_density', 1.0):.1f}, "
                       f"lanes={new_cfg.get('lanes_count')}, "
                       f"duration={new_cfg.get('duration')}")
             else:
-                print(f"   STAGE FINALE — continuo su Stage {self.current_stage}")
+                print(f"   FINAL STAGE - continuing on Stage {self.current_stage}")
             print(f"{'*'*55}")
 
-        # Resetta tracking per il nuovo stage
+        # Reset tracking for the new stage
         self.stage_episodes = []
         self.eval_episodes = []
-        self.competence_survival = 0.0  # Resetta competence per il nuovo stage
-        self.stall_best_survival = 0.0  # Resetta stall detection
+        self.competence_survival = 0.0  # Reset competence for new stage
+        self.stall_best_survival = 0.0  # Reset stall detection
         self.stall_eval_at_best = 0
         self.in_focus_mode = False
 
-        # === CHECKPOINT: salva modello al completamento dello stage ===
+        # === CHECKPOINT: save model on stage completion ===
         if self.save_dir:
             path = Path(self.save_dir)
             path.mkdir(parents=True, exist_ok=True)
@@ -1140,9 +973,9 @@ class ACCELCallback(BaseCallback):
             with open(path / f"{tag}_info.json", 'w') as f:
                 json.dump(resume_state, f, indent=2)
             if self.verbose:
-                print(f"  [CHECKPOINT] Stage {old_stage} salvato: {tag}.zip")
+                print(f"  [CHECKPOINT] Stage {old_stage} saved: {tag}.zip")
 
-        # Aggiungi config del nuovo stage al buffer PLR + varianti con bounds
+        # Add new stage config and bounded variants to PLR buffer
         new_config = self.generator.get_stage_config(self.current_stage)
         self.current_stage_seed = self.sampler.add_level(new_config)
         stage_bounds = self.generator.get_stage_param_bounds(self.current_stage)
@@ -1150,7 +983,7 @@ class ACCELCallback(BaseCallback):
             variant = self.generator.mutate_level(new_config, num_edits=2, stage_bounds=stage_bounds)
             self.sampler.add_level(variant, parent_seed=self.current_stage_seed)
 
-        # Aggiorna tutti gli env al nuovo stage come punto di partenza
+        # Update all envs to the new stage config
         for i in range(self.num_envs):
             self.env_level_seeds[i] = self.current_stage_seed
             try:
@@ -1168,7 +1001,7 @@ class ACCELCallback(BaseCallback):
 
         print(f"\n{'='*65}")
         print(f" Step {self.n_calls * self.num_envs:>8,} | Ep: {self.total_episodes:>5} | "
-              f"Tempo: {elapsed/60:.1f}min | SPS: {sps:.0f}")
+              f"Time: {elapsed/60:.1f}min | SPS: {sps:.0f}")
         print(f"{'-'*65}")
 
         if len(self.all_returns) > 0:
@@ -1177,9 +1010,9 @@ class ACCELCallback(BaseCallback):
             print(f" Reward (last 50):  {np.mean(recent):>7.2f} ± {np.std(recent):.2f}")
             print(f" Reward (best):     {best:>7.2f}")
             if len(self.all_lengths) > 0:
-                print(f" Lunghezza media:   {np.mean(list(self.all_lengths)[-50:]):>7.0f} steps")
+                print(f" Avg length:        {np.mean(list(self.all_lengths)[-50:]):>7.0f} steps")
 
-        mode = "WARMUP (stage 0 fisso)" if not self.warmup_done else "ACCEL CURRICULUM"
+        mode = "WARMUP (stage 0 fixed)" if not self.warmup_done else "ACCEL CURRICULUM"
         if self.warmup_done:
             if self.competence_survival < self.competence_gate_threshold:
                 mode += f" [GATE: survival={self.competence_survival*100:.0f}%<{self.competence_gate_threshold*100:.0f}%]"
@@ -1189,21 +1022,21 @@ class ACCELCallback(BaseCallback):
                 mode += f" [PLR {cr*100:.0f}%]"
             if self.in_focus_mode:
                 mode += " [FOCUS]"
-        print(f" Modalità:          {mode}")
+        print(f" Mode:              {mode}")
 
-        # Stage progress (mastery basata SOLO su eval episodes)
+        # Stage progress (mastery based on eval episodes only)
         mi = self.mastery_info
         stage_max = self.generator.num_stages - 1
-        print(f" Stage attuale:     {self.current_stage}/{stage_max} "
+        print(f" Current stage:     {self.current_stage}/{stage_max} "
               f"(eval={mi['eval_episodes']}/{mi['total_episodes']} ep, "
               f"avg={mi['avg_return']:.1f}, "
               f"survival={mi['survival_rate']:.0f}%, "
               f"target={self.mastery_threshold*100:.0f}%)")
-        print(f" Stages completati: {len(self.stages_mastered)}")
+        print(f" Stages mastered:   {len(self.stages_mastered)}")
 
-        # Config dello stage
+        # Stage config
         stage_cfg = self.generator.get_stage_config(self.current_stage)
-        print(f" Config stage:      vehicles={stage_cfg.get('vehicles_count')}, "
+        print(f" Stage config:      vehicles={stage_cfg.get('vehicles_count')}, "
               f"density={stage_cfg.get('vehicles_density', 1.0):.1f}, "
               f"lanes={stage_cfg.get('lanes_count')}, "
               f"duration={stage_cfg.get('duration', 60)}")
@@ -1223,15 +1056,15 @@ class ACCELCallback(BaseCallback):
 
             step = self.n_calls * self.num_envs
 
-            # Salva con nome unico (non sovrascrive mai)
+            # Save with unique name (never overwrites)
             self.model.save(str(path / f"checkpoint_step{step}.zip"))
             self.sampler.save(str(path / f"plr_step{step}.pkl"))
 
-            # Salva anche come 'latest' per ripristino rapido
+            # Also save as 'latest' for quick resume
             self.model.save(str(path / "checkpoint_latest.zip"))
             self.sampler.save(str(path / "plr_latest.pkl"))
 
-            # Stats completi per ripristino
+            # Full stats for resume
             stats = {
                 'step': step,
                 'total_episodes': self.total_episodes,
@@ -1245,7 +1078,7 @@ class ACCELCallback(BaseCallback):
                 json.dump(stats, f, indent=2)
 
             if self.verbose:
-                print(f"\n  [CHECKPOINT] Step {step:,} salvato in {path}")
+                print(f"\n  [CHECKPOINT] Step {step:,} saved to {path}")
 
             self.last_checkpoint_step = step
 
@@ -1274,20 +1107,19 @@ class ACCELCallback(BaseCallback):
             with open(path / "training_stats.json", 'w') as f:
                 json.dump(stats, f, indent=2, default=str)
 
-            print(f"\n[ACCEL] Statistiche salvate in: {path / 'training_stats.json'}")
-            print(f"[ACCEL] Stages padroneggiati: {len(self.stages_mastered)}")
-            print(f"[ACCEL] Stage finale: {self.current_stage}/{self.generator.num_stages - 1}")
+            print(f"\n[ACCEL] Stats saved to: {path / 'training_stats.json'}")
+            print(f"[ACCEL] Stages mastered: {len(self.stages_mastered)}")
+            print(f"[ACCEL] Final stage: {self.current_stage}/{self.generator.num_stages - 1}")
 
 
 # =============================================================================
-#  BEST MODEL CALLBACK (protezione contro collapse)
+#  BEST MODEL CALLBACK (collapse protection)
 # =============================================================================
 
 class BestModelCallback(BaseCallback):
     """
-    Salva il modello quando la reward media (su una finestra) migliora.
-    Previene la perdita di progressi in caso di collapse:
-    best_model.zip contiene sempre il miglior modello visto.
+    Saves the model when mean reward (over a window) improves.
+    best_model.zip always contains the best model seen so far.
     """
 
     def __init__(self, save_path: str, check_freq: int = 1000, window: int = 50, verbose: int = 1):
@@ -1330,7 +1162,7 @@ class BestModelCallback(BaseCallback):
                     json.dump(info_data, f, indent=2)
 
                 if self.verbose:
-                    print(f"\n  \u2605 BEST MODEL salvato! Reward: {mean_reward:.2f} (+{improvement:.2f}) "
+                    print(f"\n  \u2605 BEST MODEL saved! Reward: {mean_reward:.2f} (+{improvement:.2f}) "
                           f"| Len: {mean_length:.0f} | Step: {self.n_calls:,}")
 
         return True
@@ -1345,7 +1177,7 @@ def train_dqn_accel(
     num_envs: int = 8,
     use_accel: bool = True,
     use_fast_env: bool = True,
-    # Modello pre-trainato
+    # Pre-trained model
     pretrained_path: Optional[str] = None,
     # PLR hyperparams (DCD defaults)
     plr_buffer_size: int = 4000,
@@ -1362,38 +1194,38 @@ def train_dqn_accel(
     mastery_window: int = 50,
     mastery_min_episodes: int = 50,
     max_episodes_per_stage: int = 500,
-    # DQN hyperparams (ottimizzati per highway-env)
+    # DQN hyperparams (optimized for highway-env)
     learning_rate: float = 5e-4,
     buffer_size: int = 100_000,
     learning_starts: int = 1000,
     batch_size: int = 64,
     gamma: float = 0.95,
     train_freq: int = 4,
-    gradient_steps: int = 4,             # 4 = buon trade-off efficienza/stabilità con multi-env
-    target_update_interval: int = 250,   # Allineato a baseline (50 era troppo aggressivo)
-    exploration_fraction: float = 0.3,   # 30% dei timestep in esplorazione
+    gradient_steps: int = 4,             # 4 = good efficiency/stability trade-off with multi-env
+    target_update_interval: int = 250,   # Aligned with baseline (50 was too aggressive)
+    exploration_fraction: float = 0.3,   # 30% of timesteps in exploration
     exploration_final_eps: float = 0.05,
     net_arch: Optional[List[int]] = None,
-    # Salvataggio
+    # Save
     save_dir: str = './dqn_accel_models',
     save_interval: int = 50_000,
-    # Generale
+    # General
     device: str = 'auto',
     seed: int = 42,
     verbose: int = 1,
-    # Configurazione base dell'env (come la baseline dell'utente)
+    # Base env config (matching user baseline)
     base_env_config: Optional[Dict] = None,
-    # Stage di partenza (per riprendere da uno stage specifico)
+    # Starting stage (to resume from a specific stage)
     start_stage: int = 0,
-    # Proximity reward (distanza di sicurezza) — disabilitato di default
+    # Proximity reward (safety distance) - disabled by default
     safety_distance: float = 25.0,
     proximity_penalty_val: float = 0.0,
 ) -> Tuple[DQN, LevelSampler]:
     """
-    Training DQN + ACCEL per highway-env.
-    
+    DQN + ACCEL training for highway-env.
+
     Returns:
-        (modello_trainato, level_sampler)
+        (trained_model, level_sampler)
     """
     if net_arch is None:
         net_arch = [256, 256]
@@ -1410,18 +1242,18 @@ def train_dqn_accel(
     print(f"  Replay prob:     {plr_replay_prob}")
     accel_info = f"ON (prob={level_editor_prob}, edits={num_edits})" if use_accel else "OFF"
     print(f"  ACCEL mutations: {accel_info}")
-    print(f"  Warmup:          {warmup_episodes} episodi")
-    print(f"  Mastery:         soglia={mastery_threshold}, finestra={mastery_window} ep, max={max_episodes_per_stage} ep/stage")
-    print(f"  Stages:          {len(ACCELGenerator.DIFFICULTY_STAGES)} (Trivial → Expert)")
+    print(f"  Warmup:          {warmup_episodes} episodes")
+    print(f"  Mastery:         threshold={mastery_threshold}, window={mastery_window} ep, max={max_episodes_per_stage} ep/stage")
+    print(f"  Stages:          {len(ACCELGenerator.DIFFICULTY_STAGES)} (Trivial -> Expert)")
     if start_stage > 0:
-        print(f"  Start stage:     {start_stage} (salta warmup, curriculum attivo subito)")
-    prox_status = f"ON (safety_dist={safety_distance}m, max_penalty={proximity_penalty_val})" if proximity_penalty_val > 0 else "OFF (segnale pulito: solo speed + crash)"
+        print(f"  Start stage:     {start_stage} (skip warmup, curriculum active immediately)")
+    prox_status = f"ON (safety_dist={safety_distance}m, max_penalty={proximity_penalty_val})" if proximity_penalty_val > 0 else "OFF (clean signal: speed + crash only)"
     print(f"  Proximity reward: {prox_status}")
-    print(f"  Competence gate: ON (PLR disabilitato sotto {50}% survival)")
+    print(f"  Competence gate: ON (PLR disabled below {50}% survival)")
     if pretrained_path:
         print(f"  Pre-trained:     {pretrained_path}")
     else:
-        print(f"  Pre-trained:     Nessuno (training da zero)")
+        print(f"  Pre-trained:     None (training from scratch)")
     print(f"  DQN lr:          {learning_rate}")
     print(f"  DQN batch_size:  {batch_size}")
     print(f"  DQN buffer:      {buffer_size:,}")
@@ -1434,7 +1266,7 @@ def train_dqn_accel(
     save_path = Path(save_dir)
     save_path.mkdir(parents=True, exist_ok=True)
 
-    # Generatore livelli ACCEL
+    # ACCEL level generator
     generator = ACCELGenerator(base_config=base_env_config, seed=seed)
 
     # PLR Sampler
@@ -1448,24 +1280,23 @@ def train_dqn_accel(
         seed=seed,
     )
 
-    # Configurazione stage di partenza e stage finale
+    # Starting and final stage config
     effective_start = min(start_stage, generator.num_stages - 1)
     base_config = generator.get_stage_config(effective_start)
-    print(f"\nStage {effective_start} (partenza): lanes={base_config.get('lanes_count')}, "
+    print(f"\nStage {effective_start} (start):  lanes={base_config.get('lanes_count')}, "
           f"vehicles={base_config.get('vehicles_count')}, "
           f"density={base_config.get('vehicles_density', 1.0):.1f}, "
           f"duration={base_config.get('duration')}")
     final_config = generator.get_stage_config(generator.num_stages - 1)
-    print(f"Stage {generator.num_stages-1} (finale):   lanes={final_config.get('lanes_count')}, "
+    print(f"Stage {generator.num_stages-1} (final):  lanes={final_config.get('lanes_count')}, "
           f"vehicles={final_config.get('vehicles_count')}, "
           f"density={final_config.get('vehicles_density', 1.0):.1f}, "
           f"duration={final_config.get('duration')}")
 
-    # SubprocVecEnv = vero parallelismo (ogni env in un processo separato)
-    # ~6x speedup rispetto a DummyVecEnv con 6 envs
+    # SubprocVecEnv = true parallelism (each env in a separate process)
     def _make_env(idx, config=base_config):
         def _init():
-            import highway_env as _henv  # Registra env nel subprocess
+            import highway_env as _henv  # Register env in subprocess
             env = ConfigurableHighwayEnv(
                 env_id=env_id,
                 initial_config=config,
@@ -1480,39 +1311,39 @@ def train_dqn_accel(
         vec_env = SubprocVecEnv([_make_env(i) for i in range(num_envs)])
     except Exception as e:
         if verbose:
-            print(f"  SubprocVecEnv non disponibile ({e}), fallback DummyVecEnv")
+            print(f"  SubprocVecEnv unavailable ({e}), fallback to DummyVecEnv")
         vec_env = DummyVecEnv([_make_env(i) for i in range(num_envs)])
         vec_env_type = "DummyVecEnv"
-    print(f"Creati {num_envs} environment paralleli ({vec_env_type})\n")
+    print(f"Created {num_envs} parallel environments ({vec_env_type})\n")
 
     # Device
     if device == 'auto':
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Device: {device}\n")
 
-    # Crea o carica modello DQN
+    # Create or load DQN model
     if pretrained_path:
-        print(f"\nCaricamento modello pre-trainato: {pretrained_path}")
+        print(f"\nLoading pre-trained model: {pretrained_path}")
         model = DQN.load(
             pretrained_path,
             env=vec_env,
             device=device,
             learning_rate=learning_rate,
             buffer_size=buffer_size,
-            learning_starts=0,  # Inizia subito (il modello sa già guidare)
+            learning_starts=0,  # Start immediately (model already knows how to drive)
             batch_size=batch_size,
             gamma=gamma,
             train_freq=train_freq,
             gradient_steps=gradient_steps,
             target_update_interval=target_update_interval,
-            exploration_fraction=min(exploration_fraction, 0.3),  # Pretrained: meno esplorazione
+            exploration_fraction=min(exploration_fraction, 0.3),  # Pre-trained: less exploration
             exploration_final_eps=exploration_final_eps,
-            exploration_initial_eps=0.15,  # Bassa: il modello sa già cosa fare
+            exploration_initial_eps=0.15,  # Low: model already knows what to do
             verbose=0,
             tensorboard_log=str(save_path / 'tensorboard'),
             seed=seed,
         )
-        print(f"  Modello caricato! Esplorazione iniziale ridotta a 0.15")
+        print(f"  Model loaded! Initial exploration reduced to 0.15")
     else:
         model = DQN(
             'MlpPolicy',
@@ -1534,7 +1365,7 @@ def train_dqn_accel(
             seed=seed,
         )
 
-    # Callback ACCEL
+    # ACCEL Callback
     callback = ACCELCallback(
         vec_env=vec_env,
         sampler=sampler,
@@ -1556,7 +1387,7 @@ def train_dqn_accel(
         start_stage=effective_start,
     )
 
-    # Best model callback (protezione contro collapse)
+    # Best model callback (collapse protection)
     best_callback = BestModelCallback(
         save_path=str(save_path),
         check_freq=1000,
@@ -1565,16 +1396,16 @@ def train_dqn_accel(
     )
 
     # Training
-    print("Avvio training...\n")
+    print("Starting training...\n")
     t0 = time.time()
     model.learn(total_timesteps=total_timesteps, callback=[callback, best_callback])
     training_time = time.time() - t0
 
-    # Salva modello
+    # Save model
     model_path = save_path / "dqn_accel_final.zip"
     model.save(str(model_path))
 
-    # Salva config di training
+    # Save training config
     training_config = {
         'algorithm': 'DQN',
         'method': 'ACCEL' if use_accel else 'Robust PLR',
@@ -1613,9 +1444,9 @@ def train_dqn_accel(
         json.dump(training_config, f, indent=2)
 
     print(f"\n{'='*65}")
-    print(f"  Training completato!")
-    print(f"  Tempo: {training_time/60:.1f} minuti")
-    print(f"  Modello: {model_path}")
+    print(f"  Training completed!")
+    print(f"  Time: {training_time/60:.1f} minutes")
+    print(f"  Model: {model_path}")
     print(f"{'='*65}\n")
 
     vec_env.close()
@@ -1634,7 +1465,7 @@ def evaluate_model(
     use_metrics_tracker: bool = True,
 ) -> Dict:
     """
-    Valuta il modello DQN su configurazioni diverse per testare la generalizzazione.
+    Evaluate the DQN model on different configs to test generalization.
     """
     from metrics_tracker import evaluate as mt_evaluate, HighwayMetrics
 
@@ -1643,7 +1474,7 @@ def evaluate_model(
 
     model = DQN.load(model_path, device=device)
 
-    # Configurazioni di test (usa stessi FIXED_PARAMS + DIFFICULTY_STAGES del training)
+    # Test configs (uses same FIXED_PARAMS + DIFFICULTY_STAGES as training)
     fixed = ACCELGenerator.FIXED_PARAMS.copy()
     test_configs = [
         {
@@ -1676,7 +1507,7 @@ def evaluate_model(
               f"density={config['vehicles_density']}")
         print(f"{'='*55}")
 
-        eval_env_id = "highway-v0" if render else "highway-fast-v0"  # fast per coerenza col training
+        eval_env_id = "highway-v0" if render else "highway-fast-v0"  # fast for training consistency
         env = gymnasium.make(eval_env_id, config=config, render_mode='rgb_array')
 
         if use_metrics_tracker:
@@ -1690,7 +1521,7 @@ def evaluate_model(
                 metrics=metrics_to_use, render=render, verbose=False, seed=42,
             )
         else:
-            # Valutazione semplice
+            # Simple evaluation
             returns = []
             for ep in tqdm(range(n_episodes), desc=name):
                 obs, _ = env.reset()
@@ -1734,72 +1565,72 @@ if __name__ == "__main__":
         description="DQN + ACCEL Training for Highway-Env",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Esempi:
-  # Training con modello pre-trainato (RACCOMANDATO)
+Examples:
+  # Training with pre-trained model (RECOMMENDED)
   python dqn_accel.py --pretrained src/highway_dqn/model.zip --timesteps 500000
 
-  # Training da zero (più lento)
+  # Training from scratch (slower)
   python dqn_accel.py --timesteps 500000 --num-envs 6
 
-  # Mastery più aggressiva (avanza prima)
+  # Aggressive mastery (advances sooner)
   python dqn_accel.py --pretrained src/highway_dqn/model.zip --mastery-threshold 0.7
 
-  # Valutazione modello
+  # Evaluate model
   python dqn_accel.py --eval-only ./dqn_accel_models/dqn_accel_final.zip
         """
     )
 
     # Pre-trained model
     parser.add_argument('--pretrained', type=str, default=None,
-                        help='Path al modello DQN pre-trainato (.zip)')
+                        help='Path to pre-trained DQN model (.zip)')
 
     # Training
     parser.add_argument('--timesteps', type=int, default=500_000,
-                        help='Timesteps totali (default: 500000)')
+                        help='Total timesteps (default: 500000)')
     parser.add_argument('--num-envs', type=int, default=8,
-                        help='Numero di environment paralleli (default: 8)')
+                        help='Number of parallel environments (default: 8)')
     parser.add_argument('--accel', dest='use_accel', action='store_true', default=True,
                         help='Usa ACCEL (PLR + mutazioni) [default]')
     parser.add_argument('--no-accel', dest='use_accel', action='store_false',
-                        help='Solo Robust PLR (senza mutazioni)')
+                        help='Robust PLR only (no mutations)')
     parser.add_argument('--fast-env', dest='use_fast', action='store_true', default=True,
-                        help='Usa highway-fast-v0 (15x velocità) [default]')
+                        help='Use highway-fast-v0 (15x speed) [default]')
     parser.add_argument('--no-fast-env', dest='use_fast', action='store_false',
-                        help='Usa highway-v0 standard (più lento)')
+                        help='Use standard highway-v0 (slower)')
 
     # PLR
     parser.add_argument('--plr-buffer', type=int, default=4000,
-                        help='Dimensione buffer PLR (default: 4000)')
+                        help='PLR buffer size (default: 4000)')
     parser.add_argument('--replay-prob', type=float, default=0.95,
-                        help='Probabilità replay (default: 0.95)')
+                        help='Replay probability (default: 0.95)')
     parser.add_argument('--warmup', type=int, default=500,
-                        help='Episodi di warmup (default: 500)')
+                        help='Warmup episodes (default: 500)')
 
     # Mastery
     parser.add_argument('--mastery-threshold', type=float, default=0.80,
-                        help='Soglia mastery (0-1, default: 0.80 = 80%% survival)')
+                        help='Mastery threshold (0-1, default: 0.80 = 80%% survival)')
     parser.add_argument('--mastery-window', type=int, default=50,
-                        help='Episodi finestra per valutare mastery (default: 50)')
+                        help='Window size for mastery evaluation (default: 50)')
     parser.add_argument('--mastery-min-ep', type=int, default=50,
-                        help='Minimo episodi per stage prima di avanzare (default: 50)')
+                        help='Min episodes per stage before advancing (default: 50)')
     parser.add_argument('--max-ep-per-stage', type=int, default=500,
-                        help='Max episodi per stage (default: 500, poi avanza)')
+                        help='Max episodes per stage (default: 500, then advance)')
     parser.add_argument('--start-stage', type=int, default=0,
-                        help='Stage di partenza (default: 0). Se >0, salta il warmup.')
+                        help='Starting stage (default: 0). If >0, skip warmup.')
 
-    # Proximity reward (distanza di sicurezza)
+    # Proximity reward (safety distance)
     parser.add_argument('--safety-distance', type=float, default=25.0,
-                        help='Distanza di sicurezza in metri (default: 25.0). '
-                             'Sotto questa distanza si attiva la penalità.')
+                        help='Safety distance in meters (default: 25.0). '
+                             'Below this distance the penalty activates.')
     parser.add_argument('--proximity-penalty', type=float, default=0.0,
-                        help='Penalità massima per prossimità (default: 0.0 = OFF). '
-                             'Se attivata (es. 0.3): a 10m ~0.11/step, a 5m ~0.19/step.')
+                        help='Max proximity penalty (default: 0.0 = OFF). '
+                             'If enabled (e.g. 0.3): ~0.11/step at 10m, ~0.19/step at 5m.')
 
     # ACCEL
     parser.add_argument('--editor-prob', type=float, default=0.5,
-                        help='Probabilità mutazione livello (default: 0.5)')
+                        help='Level mutation probability (default: 0.5)')
     parser.add_argument('--num-edits', type=int, default=3,
-                        help='Numero edit per mutazione (default: 3)')
+                        help='Number of edits per mutation (default: 3)')
 
     # DQN
     parser.add_argument('--lr', type=float, default=5e-4,
@@ -1810,56 +1641,56 @@ Esempi:
                         help='Replay buffer size (default: 100000)')
     parser.add_argument('--gamma', type=float, default=0.95,
                         help='Discount factor (default: 0.95)')
-    parser.add_argument('--train-freq', type=int, default=4,
-                        help='Training frequency (default: 4)')
+    parser.add_argument('--train-freq', type=int, default=2,
+                        help='Training frequency (default: 2)')
 
-    # Generale
+    # General
     parser.add_argument('--save-dir', type=str, default='./dqn_accel_models',
-                        help='Directory per salvare (default: ./dqn_accel_models)')
+                        help='Save directory (default: ./dqn_accel_models)')
     parser.add_argument('--save-interval', type=int, default=50_000,
-                        help='Salva checkpoint ogni N step (default: 50000)')
+                        help='Save checkpoint every N steps (default: 50000)')
     parser.add_argument('--device', type=str, default='auto', choices=['auto', 'cpu', 'cuda'],
                         help='Device (default: auto)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
-    parser.add_argument('--verbose', type=int, default=1, help='Verbosità')
+    parser.add_argument('--verbose', type=int, default=1, help='Verbosity')
 
     # Evaluation
     parser.add_argument('--eval-only', type=str, default=None,
-                        help='Path al modello per sola valutazione')
+                        help='Path to model for evaluation only')
     parser.add_argument('--eval-episodes', type=int, default=4,
-                        help='Episodi di valutazione (default: 50)')
+                        help='Evaluation episodes (default: 50)')
 
     # Config file
     parser.add_argument('--config', type=str, default=None,
-                        help='Path a file JSON di configurazione (sovrascrive CLI)')
+                        help='Path to JSON config file (overrides CLI)')
 
     args = parser.parse_args()
 
-    # Carica config da file se specificato
+    # Load config from file if specified
     if args.config:
         with open(args.config) as f:
             config = json.load(f)
-        print(f"Config caricata da: {args.config}")
-        # Sovrascrivi args con valori dal config
+        print(f"Config loaded from: {args.config}")
+        # Override args with config values
         for key, val in config.items():
             if hasattr(args, key.replace('-', '_')):
                 setattr(args, key.replace('-', '_'), val)
 
     if args.eval_only:
-        # Modalità valutazione
+        # Evaluation mode
         results = evaluate_model(
             model_path=args.eval_only,
             n_episodes=args.eval_episodes,
             device=args.device,
         )
 
-        # Salva risultati
+        # Save results
         results_path = Path(args.eval_only).parent / 'evaluation_results.json'
         with open(results_path, 'w') as f:
             json.dump(results, f, indent=2, default=str)
-        print(f"Risultati salvati: {results_path}")
+        print(f"Results saved: {results_path}")
     else:
-        # Modalità training
+        # Training mode
         model, sampler = train_dqn_accel(
             total_timesteps=args.timesteps,
             num_envs=args.num_envs,
@@ -1890,5 +1721,5 @@ Esempi:
             proximity_penalty_val=args.proximity_penalty,
         )
 
-        print(f"\nPer valutare il modello:")
+        print(f"\nTo evaluate the model:")
         print(f"  python src/dqn_accel.py --eval-only {args.save_dir}/dqn_accel_final.zip")

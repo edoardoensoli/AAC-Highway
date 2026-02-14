@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 """
-Script per testare un modello DQN su highway-env con render attivato.
-Visualizza il comportamento dell'agente in diverse condizioni di difficoltà.
-Mostra anche metriche di prossimità per valutare la distanza di sicurezza.
+Test DQN models on highway-env with visual rendering.
+Displays agent behavior across different difficulty levels and tracks proximity metrics.
 """
 
 import gymnasium
@@ -13,7 +12,7 @@ from stable_baselines3 import DQN
 from src.dqn_accel import ACCELGenerator
 
 def _compute_min_distance(env):
-    """Calcola la distanza minima dall'ego ai veicoli vicini (davanti/lato)."""
+    """Compute minimum distance from ego vehicle to nearby vehicles (front/side)."""
     try:
         ego = env.unwrapped.vehicle
         road = env.unwrapped.road
@@ -38,57 +37,55 @@ def test_model_with_render(
     model_path: str,
     n_episodes: int = 5,
     device: str = 'cpu',
-    difficulty: str = 'easy',  # easy, medium, hard, expert
+    difficulty: str = 'easy',
 ):
     """
-    Testa il modello con render.
+    Test model with visual rendering.
     
     Args:
-        model_path: Path al modello .zip
-        n_episodes: Numero di episodi da visualizzare
-        device: Device (cpu o cuda)
-        difficulty: Livello di difficoltà (easy, medium, hard, expert)
+        model_path: Path to model .zip file
+        n_episodes: Number of episodes to render
+        device: cpu or cuda
+        difficulty: easy, medium, hard, or expert
     """
     
     print(f"\n{'='*65}")
-    print(f"  Testing con RENDER: {Path(model_path).name}")
+    print(f"  Testing with render: {Path(model_path).name}")
     print(f"{'='*65}\n")
     
-    # Carica modello
     if not Path(model_path).exists():
-        print(f"❌ Modello non trovato: {model_path}")
+        print(f"Model not found: {model_path}")
         return
     
     model = DQN.load(model_path, device=device)
-    print(f"✓ Modello caricato da: {model_path}")
+    print(f"Model loaded from: {model_path}")
     
-    # Config per difficoltà (rispecchia DIFFICULTY_STAGES)
     configs = {
         'easy': {
-            'name': 'Facile — 2 corsie, 15 auto, IDM (Stage 0)',
+            'name': 'Easy: 2 lanes, 30 vehicles, IDM (Stage 0)',
             'lanes_count': 2, 'vehicles_count': 30, 'vehicles_density': 1.0, 'duration': 50,
             'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
         },
         'medium': {
-            'name': 'Medio — 3 corsie, 18 auto, IDM (Stage 2)',
+            'name': 'Medium: 3 lanes, 20 vehicles, IDM (Stage 2)',
             'lanes_count': 3, 'vehicles_count': 20, 'vehicles_density': 1.0, 'duration': 100,
             'other_vehicles_type': 'highway_env.vehicle.behavior.IDMVehicle',
         },
         'hard': {
-            'name': 'Difficile — 3 corsie, 25 auto, Aggressive (Stage 3)',
+            'name': 'Hard: 4 lanes, 40 vehicles, Aggressive (Stage 3)',
             'lanes_count': 4, 'vehicles_count': 40, 'vehicles_density': 1.2, 'duration': 60,
             'other_vehicles_type': 'highway_env.vehicle.behavior.AggressiveVehicle',
         },
         'expert': {
-            'name': 'Esperto — 2 corsie, 50 auto, Aggressive (Stage 6)',
+            'name': 'Expert: 2 lanes, 50 vehicles, Aggressive (Stage 6)',
             'lanes_count': 2, 'vehicles_count': 50, 'vehicles_density': 2.0, 'duration': 80,
             'other_vehicles_type': 'highway_env.vehicle.behavior.AggressiveVehicle',
         }
     }
     
     if difficulty not in configs:
-        print(f"⚠️  Difficoltà non riconosciuta: {difficulty}")
-        print(f"   Opzioni: {', '.join(configs.keys())}")
+        print(f"Unknown difficulty: {difficulty}")
+        print(f"Options: {', '.join(configs.keys())}")
         return
     
     cfg_info = configs[difficulty]
@@ -97,20 +94,19 @@ def test_model_with_render(
         **{k: v for k, v in cfg_info.items() if k != 'name'}
     }
     
-    print(f"Difficoltà: {cfg_info['name']}")
+    print(f"Difficulty: {cfg_info['name']}")
     print(f"Config: vehicles={config['vehicles_count']}, "
           f"density={config['vehicles_density']}, "
           f"lanes={config['lanes_count']}, "
           f"duration={config['duration']}")
-    print(f"\nGenerando {n_episodes} episodi di test...\n")
+    print(f"\nRunning {n_episodes} test episodes...\n")
     
-    # Test con render
     env = gymnasium.make('highway-v0', config=config, render_mode='human')
     
     episode_returns = []
     episode_lengths = []
-    episode_min_distances = []  # Distanza minima mai raggiunta per episodio
-    episode_avg_distances = []  # Distanza media per episodio
+    episode_min_distances = []
+    episode_avg_distances = []
     
     try:
         for ep in range(n_episodes):
@@ -127,12 +123,10 @@ def test_model_with_render(
                 ep_return += reward
                 ep_length += 1
                 
-                # Traccia distanza di sicurezza
                 min_d = _compute_min_distance(env)
-                if min_d < 100.0:  # Solo distanze significative
+                if min_d < 100.0:
                     ep_distances.append(min_d)
                 
-                # Render
                 env.render()
             
             episode_returns.append(ep_return)
@@ -143,15 +137,14 @@ def test_model_with_render(
             episode_min_distances.append(ep_min_dist)
             episode_avg_distances.append(ep_avg_dist)
             
-            # Survival: agente sopravvissuto se ep_length >= 85% expected
             expected_steps = config['duration'] * config.get('policy_frequency', 2) * 0.85
-            survived = "✓ SOPRAVVISSUTO" if ep_length >= expected_steps else "✗ CRASH"
+            survived = "SURVIVED" if ep_length >= expected_steps else "CRASHED"
             
             dist_warning = ""
             if ep_min_dist < 10:
-                dist_warning = " ⚠️ TROPPO VICINO"
+                dist_warning = " [TOO CLOSE]"
             elif ep_min_dist < 15:
-                dist_warning = " ⚡ distanza bassa"
+                dist_warning = " [low distance]"
             
             print(f"Ep {ep+1:2d}/{n_episodes} | Return: {ep_return:7.2f} | "
                   f"Length: {ep_length:3d} | MinDist: {ep_min_dist:5.1f}m | "
@@ -160,21 +153,20 @@ def test_model_with_render(
     finally:
         env.close()
     
-    # Summary
     print(f"\n{'='*65}")
-    print(f"Risultati test — {cfg_info['name']}")
+    print(f"Test results: {cfg_info['name']}")
     print(f"{'='*65}")
-    print(f"Reward medio:        {np.mean(episode_returns):7.2f} ± {np.std(episode_returns):.2f}")
-    print(f"Lunghezza media:     {np.mean(episode_lengths):7.0f} steps")
+    print(f"Average reward:      {np.mean(episode_returns):7.2f} ± {np.std(episode_returns):.2f}")
+    print(f"Average length:      {np.mean(episode_lengths):7.0f} steps")
     survival_rate = sum(1 for l in episode_lengths if l >= config['duration'] * 2 * 0.85) / len(episode_lengths)
     print(f"Survival rate:       {survival_rate*100:6.1f}%")
     
     finite_mins = [d for d in episode_min_distances if d < float('inf')]
     finite_avgs = [d for d in episode_avg_distances if d < float('inf')]
     if finite_mins:
-        print(f"Distanza minima:     {np.mean(finite_mins):5.1f}m (media), {min(finite_mins):5.1f}m (worst)")
-        print(f"Distanza media:      {np.mean(finite_avgs):5.1f}m")
-    print(f"Episodi completati:  {len(episode_returns)}/{n_episodes}")
+        print(f"Min distance:        {np.mean(finite_mins):5.1f}m (avg), {min(finite_mins):5.1f}m (worst)")
+        print(f"Avg distance:        {np.mean(finite_avgs):5.1f}m")
+    print(f"Episodes completed:  {len(episode_returns)}/{n_episodes}")
     print(f"{'='*65}\n")
     
     return {
@@ -191,32 +183,27 @@ if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='Test modello DQN con render',
+        description='Test DQN model with rendering',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Esempi:
-  # Test modello best su difficoltà facile
-  python test_render.py --model ./dqn_accel_models/best_model.zip --difficulty easy
-
-  # Test su difficoltà esperto con 10 episodi
-  python test_render.py --model ./dqn_accel_models/best_model.zip --difficulty expert --episodes 10
-
-  # Test su tutti i livelli
-  python test_render.py --model ./dqn_accel_models/best_model.zip --all-difficulties
+Examples:
+  python test_render.py --model ./highway_dqn_accel/dqn_accel_final_1M.zip --difficulty easy
+  python test_render.py --model ./highway_dqn_accel/dqn_accel_final_1M.zip --difficulty expert --episodes 10
+  python test_render.py --model ./highway_dqn_accel/dqn_accel_final_1M.zip --all-difficulties
         """
     )
     parser.add_argument('--model', type=str, required=True,
-                        help='Path al modello DQN (.zip)')
+                        help='Path to DQN model (.zip)')
     parser.add_argument('--difficulty', type=str, default='easy',
                         choices=['easy', 'medium', 'hard', 'expert'],
-                        help='Livello di difficoltà (default: easy)')
+                        help='Difficulty level (default: easy)')
     parser.add_argument('--episodes', type=int, default=5,
-                        help='Numero di episodi da visualizzare (default: 5)')
+                        help='Number of episodes to render (default: 5)')
     parser.add_argument('--device', type=str, default='cpu',
                         choices=['cpu', 'cuda'],
                         help='Device (default: cpu)')
     parser.add_argument('--all-difficulties', action='store_true',
-                        help='Testa tutti i livelli di difficoltà')
+                        help='Test all difficulty levels')
     
     args = parser.parse_args()
     
@@ -232,11 +219,10 @@ Esempi:
             if result:
                 results[diff] = result
         
-        # Salva risultati
         save_path = Path(args.model).parent / 'render_test_results.json'
         with open(save_path, 'w') as f:
             json.dump(results, f, indent=2)
-        print(f"Risultati salvati: {save_path}")
+        print(f"Results saved: {save_path}")
     else:
         test_model_with_render(
             model_path=args.model,
