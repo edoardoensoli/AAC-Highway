@@ -7,3 +7,6 @@ src/highway_dqn_plr/*
 src
 plr
 aac_highway.egg-info
+!plr_dqn/plr
+plr_dqn/plr/runs/dqn_v2
+plr_dqn/plr/runs/dqn_v1
